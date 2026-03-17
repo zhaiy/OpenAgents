@@ -1,7 +1,7 @@
 import { RuntimeError } from '../errors.js';
 import type { AgentRuntime, ExecuteParams, ExecuteResult } from '../types/index.js';
 
-const DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode';
+const DEFAULT_BASE_URL = '';
 
 interface LLMDirectRuntimeConfig {
   apiKey?: string;
@@ -54,8 +54,14 @@ export class LLMDirectRuntime implements AgentRuntime {
     const timeoutMs = params.timeoutSeconds * 1000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+    // Resolve API URL: use baseUrl directly if it already contains /chat/completions
+    const url = this.baseUrl ;
+    // .includes('/chat/completions')
+    //   ? this.baseUrl
+    //   : `${this.baseUrl}/v1/chat/completions`;
+
     try {
-      const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
