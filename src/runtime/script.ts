@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
 
@@ -13,6 +14,8 @@ interface ScriptRuntimeConfig {
 
 export class ScriptRuntime implements AgentRuntime {
   private readonly config: ScriptRuntimeConfig;
+  private readonly nodeRequire = createRequire(import.meta.url);
+  private readonly allowedModules = new Set(['fs', 'path', 'url', 'util', 'crypto', 'os']);
 
   constructor(config: ScriptRuntimeConfig) {
     this.config = config;
@@ -25,29 +28,27 @@ export class ScriptRuntime implements AgentRuntime {
 
     try {
       const sandbox = {
-        require: (id: string) => this.safeRequire(id),
+        require: this.safeRequire.bind(this),
         console: { log: console.log, error: console.error, warn: console.warn },
         __input: params.userPrompt,
         __systemPrompt: params.systemPrompt,
-        __result: undefined as string | undefined,
         process: { env: { ...process.env }, cwd: () => this.config.projectRoot },
       };
 
       const context = vm.createContext(sandbox);
       const wrappedScript = `
-        (async () => {
+        (async function() {
           const input = __input;
           const systemPrompt = __systemPrompt;
           ${scriptCode}
-        })().then(r => { __result = typeof r === 'string' ? r : JSON.stringify(r); });
+        })();
       `;
-
       const script = new vm.Script(wrappedScript);
 
       // vm timeout protects against sync CPU-bound loops (e.g. while(true) {}).
-      const executionPromise = script.runInContext(context, { timeout: timeoutMs });
+      const executionPromise = Promise.resolve(script.runInContext(context, { timeout: timeoutMs }));
 
-      // Promise.race still protects async "never resolves" scripts.
+      // Promise.race protects async scripts that never resolve.
       let timeoutId: NodeJS.Timeout | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
@@ -55,15 +56,16 @@ export class ScriptRuntime implements AgentRuntime {
         }, timeoutMs);
       });
 
+      let result: unknown;
       try {
-        await Promise.race([executionPromise, timeoutPromise]);
+        result = await Promise.race([executionPromise, timeoutPromise]);
       } finally {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
       }
 
-      const output = sandbox.__result ?? '';
+      const output = this.serializeResult(result);
       return { output, duration: Date.now() - startedAt };
     } catch (error) {
       if (error instanceof RuntimeError) {
@@ -71,6 +73,20 @@ export class ScriptRuntime implements AgentRuntime {
       }
       const message = error instanceof Error ? error.message : 'script execution failed';
       throw new RuntimeError(`Script execution failed: ${message}`, 'script-runtime');
+    }
+  }
+
+  private serializeResult(result: unknown): string {
+    if (result === null || result === undefined) {
+      return '';
+    }
+    if (typeof result === 'string') {
+      return result;
+    }
+    try {
+      return JSON.stringify(result);
+    } catch {
+      return String(result);
     }
   }
 
@@ -89,15 +105,13 @@ export class ScriptRuntime implements AgentRuntime {
   }
 
   private safeRequire(id: string): unknown {
-    const allowedModules = ['fs', 'path', 'url', 'util', 'crypto', 'os'];
-    if (allowedModules.includes(id)) {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require(id);
+    const normalizedId = id.startsWith('node:') ? id.slice('node:'.length) : id;
+    if (this.allowedModules.has(normalizedId)) {
+      return this.nodeRequire(id.startsWith('node:') ? id : `node:${normalizedId}`);
     }
     if (id.startsWith('./') || id.startsWith('../')) {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      return require(path.resolve(this.config.projectRoot, id));
+      return this.nodeRequire(path.resolve(this.config.projectRoot, id));
     }
-    throw new Error(`Module "${id}" is not allowed in script runtime. Allowed: ${allowedModules.join(', ')}`);
+    throw new Error(`Module "${id}" is not allowed in script runtime. Allowed: ${Array.from(this.allowedModules).join(', ')}`);
   }
 }
