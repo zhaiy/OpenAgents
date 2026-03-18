@@ -142,28 +142,60 @@ describe('ScriptRuntime', () => {
   });
 
   describe('allowed modules', () => {
-    it('allows require of fs module', async () => {
+    it('blocks require of fs module for security', async () => {
       runtime = new ScriptRuntime({
         projectRoot: tempDir,
         scriptInline: 'const fs = require("fs"); return typeof fs.readFileSync === "function" ? "yes" : "no"',
       });
 
-      const result = await runtime.execute({
-        systemPrompt: 'system',
-        userPrompt: 'input',
-        model: '',
-        timeoutSeconds: 10,
-      });
-
-      expect(result.output).toBe('yes');
+      await expect(
+        runtime.execute({
+          systemPrompt: 'system',
+          userPrompt: 'input',
+          model: '',
+          timeoutSeconds: 10,
+        }),
+      ).rejects.toThrow('is not allowed');
     });
 
-    it('allows require of path module', async () => {
+    it('blocks require of path module for security', async () => {
       runtime = new ScriptRuntime({
         projectRoot: tempDir,
         scriptInline: 'const path = require("path"); return typeof path.join === "function" ? "yes" : "no"',
       });
 
+      await expect(
+        runtime.execute({
+          systemPrompt: 'system',
+          userPrompt: 'input',
+          model: '',
+          timeoutSeconds: 10,
+        }),
+      ).rejects.toThrow('is not allowed');
+    });
+
+    it('blocks relative imports for security', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: 'const mod = require("./some-module"); return "should not reach"',
+      });
+
+      await expect(
+        runtime.execute({
+          systemPrompt: 'system',
+          userPrompt: 'input',
+          model: '',
+          timeoutSeconds: 10,
+        }),
+      ).rejects.toThrow('is not allowed');
+    });
+
+    it('allows require of safe modules like util', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: 'const util = require("util"); return typeof util.inspect === "function" ? "yes" : "no"',
+      });
+
       const result = await runtime.execute({
         systemPrompt: 'system',
         userPrompt: 'input',
@@ -174,7 +206,23 @@ describe('ScriptRuntime', () => {
       expect(result.output).toBe('yes');
     });
 
-    it('throws error for disallowed module', async () => {
+    it('allows require of os module', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: 'const os = require("os"); return typeof os.platform === "function" ? "yes" : "no"',
+      });
+
+      const result = await runtime.execute({
+        systemPrompt: 'system',
+        userPrompt: 'input',
+        model: '',
+        timeoutSeconds: 10,
+      });
+
+      expect(result.output).toBe('yes');
+    });
+
+    it('throws error for disallowed module like child_process', async () => {
       runtime = new ScriptRuntime({
         projectRoot: tempDir,
         scriptInline: 'const child = require("child_process"); return "should not reach"',
@@ -276,17 +324,37 @@ describe('ScriptRuntime', () => {
   });
 
   describe('filesystem operations', () => {
-    it('can read and write files', async () => {
-      const testContent = 'test content';
-
+    it('blocks filesystem access for security', async () => {
       runtime = new ScriptRuntime({
         projectRoot: tempDir,
         scriptInline: `
 const fs = require('fs');
 const path = require('path');
 const filePath = path.join(process.cwd(), 'data.txt');
-fs.writeFileSync(filePath, '${testContent}');
+fs.writeFileSync(filePath, 'test');
 return fs.readFileSync(filePath, 'utf-8');
+        `,
+      });
+
+      await expect(
+        runtime.execute({
+          systemPrompt: 'system',
+          userPrompt: 'input',
+          model: '',
+          timeoutSeconds: 10,
+        }),
+      ).rejects.toThrow('is not allowed');
+    });
+  });
+
+  describe('environment variables', () => {
+    it('filters sensitive env vars from process.env', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: `
+const keys = Object.keys(process.env);
+const hasSecret = keys.some(k => k.includes('SECRET') || k.includes('API_KEY') || k.includes('PASSWORD'));
+return hasSecret ? "SENSITIVE_DATA_LEAKED" : "SAFE";
         `,
       });
 
@@ -297,7 +365,24 @@ return fs.readFileSync(filePath, 'utf-8');
         timeoutSeconds: 10,
       });
 
-      expect(result.output).toBe(testContent);
+      expect(result.output).toBe('SAFE');
+    });
+
+    it('allows safe env vars like PATH', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: 'return process.env.PATH ? "HAS_PATH" : "NO_PATH"',
+      });
+
+      const result = await runtime.execute({
+        systemPrompt: 'system',
+        userPrompt: 'input',
+        model: '',
+        timeoutSeconds: 10,
+      });
+
+      // PATH may or may not be set, but it shouldn't throw an error
+      expect(['HAS_PATH', 'NO_PATH']).toContain(result.output);
     });
   });
 });
