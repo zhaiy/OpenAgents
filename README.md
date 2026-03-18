@@ -1,4 +1,4 @@
-# openAgents
+# OpenAgents
 
 Transparent and controllable multi-agent orchestration engine.
 

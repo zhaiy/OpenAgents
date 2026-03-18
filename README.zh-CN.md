@@ -1,4 +1,4 @@
-# openAgents（中文文档）
+# OpenAgents（中文文档）
 
 透明可控的多 Agent 协作编排引擎。
 
