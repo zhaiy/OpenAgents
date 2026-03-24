@@ -25,6 +25,13 @@ interface RunOptions {
   stream?: boolean;
   noEval?: boolean;
   runId?: string;
+  /** Source run ID if this run is a recovery/rerun */
+  sourceRunId?: string;
+  /** Recovery metadata for node-level recovery */
+  recoveryInfo?: {
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
 }
 
 interface RenderContext {
@@ -75,7 +82,25 @@ export class WorkflowEngine {
 
     const plan = this.dagParser.parse(workflow.steps);
     const runId = options?.runId ?? this.deps.stateManager.generateRunId();
-    const state = this.deps.stateManager.initRun(runId, workflow.workflow.id, input, plan.order, options?.inputData);
+    const state = this.deps.stateManager.initRun(
+      runId,
+      workflow.workflow.id,
+      input,
+      plan.order,
+      options?.inputData,
+      {
+        sourceRunId: options?.sourceRunId,
+        recoveryInfo: options?.recoveryInfo,
+      },
+    );
+    if (options?.sourceRunId && options.recoveryInfo?.reusedStepIds.length) {
+      this.hydrateRecoveredSteps({
+        workflowId: workflow.workflow.id,
+        sourceRunId: options.sourceRunId,
+        targetState: state,
+        reusedStepIds: options.recoveryInfo.reusedStepIds,
+      });
+    }
     return this.executeWorkflow({
       projectConfig,
       agents,
@@ -633,6 +658,45 @@ export class WorkflowEngine {
       }
       const message = error instanceof Error ? error.message : 'unknown runtime error';
       throw new RuntimeError(message, step.id);
+    }
+  }
+
+  private hydrateRecoveredSteps(params: {
+    workflowId: string;
+    sourceRunId: string;
+    targetState: RunState;
+    reusedStepIds: string[];
+  }): void {
+    const { workflowId, sourceRunId, targetState, reusedStepIds } = params;
+    const sourceRun = this.deps.stateManager.findRunById(sourceRunId);
+    const sourceRunDir = this.deps.stateManager.getRunDir(sourceRun.workflowId, sourceRun.runId);
+    const targetRunDir = this.deps.stateManager.getRunDir(workflowId, targetState.runId);
+
+    for (const stepId of reusedStepIds) {
+      const sourceStep = sourceRun.steps[stepId];
+      if (!sourceStep || sourceStep.status !== 'completed' || !sourceStep.outputFile) {
+        continue;
+      }
+
+      const sourceOutputPath = path.join(sourceRunDir, sourceStep.outputFile);
+      const targetOutputPath = path.join(targetRunDir, sourceStep.outputFile);
+      if (!fs.existsSync(sourceOutputPath)) {
+        continue;
+      }
+
+      fs.mkdirSync(path.dirname(targetOutputPath), { recursive: true });
+      fs.copyFileSync(sourceOutputPath, targetOutputPath);
+
+      this.deps.stateManager.updateStep(targetState, stepId, {
+        status: 'completed',
+        startedAt: targetState.startedAt,
+        completedAt: targetState.startedAt,
+        outputFile: sourceStep.outputFile,
+        error: undefined,
+        retryCount: undefined,
+        tokenUsage: undefined,
+        durationMs: undefined,
+      });
     }
   }
 

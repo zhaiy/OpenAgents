@@ -1,6 +1,6 @@
 import { ConfigLoader } from '../../config/loader.js';
 import { StateManager } from '../../engine/state.js';
-import type { StepConfig, WorkflowConfig } from '../../types/index.js';
+import type { RunState, StepConfig, WorkflowConfig } from '../../types/index.js';
 import type {
   DiagnosticsSummaryDto,
   DownstreamImpactNode,
@@ -9,7 +9,13 @@ import type {
   FailurePropagation,
   NodeStatus,
   RecommendedAction,
+  WorkflowQualitySummary,
+  QualityRunSummary,
+  FailureTypeDistribution,
+  GateWaitStats,
+  EvalSummary,
 } from '../dto.js';
+import { classifyRecoverySteps } from './recovery-planner.js';
 
 interface ErrorMapping {
   pattern: RegExp;
@@ -198,7 +204,13 @@ export class DiagnosticsService {
         failedNodes,
         downstreamImpact,
         errorSummary,
+        run.status === 'failed' ? this.computeRecoveryScope(run, workflowConfig) : undefined,
       );
+
+      // Compute recovery scope for failed runs
+      const recoveryScope = run.status === 'failed'
+        ? this.computeRecoveryScope(run, workflowConfig)
+        : undefined;
 
       return {
         runId,
@@ -213,6 +225,7 @@ export class DiagnosticsService {
         errorSummary,
         upstreamStates,
         recommendedActions,
+        recoveryScope,
       };
     } catch {
       return null;
@@ -239,6 +252,98 @@ export class DiagnosticsService {
       'Try running with debug mode if available',
       'Consider creating a new run with adjusted parameters',
     ];
+  }
+
+  /**
+   * Get workflow-level quality summary aggregating multiple runs.
+   * M6: Quality observation capability.
+   *
+   * @param workflowId - The workflow ID to get quality summary for
+   * @param limit - Maximum number of recent runs to include (default 10)
+   */
+  getWorkflowQualitySummary(workflowId: string, limit = 10): WorkflowQualitySummary | null {
+    try {
+      const allRuns = this.stateManager.listRuns();
+      const workflowRuns = allRuns.filter(run => run.workflowId === workflowId);
+
+      if (workflowRuns.length === 0) {
+        return null;
+      }
+
+      // Load workflow config for name
+      let workflowName: string | undefined;
+      try {
+        const config = this.configLoader?.loadWorkflow(workflowId);
+        workflowName = config?.workflow.name;
+      } catch {
+        // Workflow config not available
+      }
+
+      // Count by status
+      const successCount = workflowRuns.filter(r => r.status === 'completed').length;
+      const failureCount = workflowRuns.filter(r => r.status === 'failed').length;
+      const activeCount = workflowRuns.filter(r => r.status === 'running' || r.status === 'interrupted').length;
+      const totalRuns = workflowRuns.length;
+
+      // Calculate rates
+      const successRate = totalRuns > 0 ? Math.round((successCount / totalRuns) * 10000) / 100 : 0;
+      const failureRate = totalRuns > 0 ? Math.round((failureCount / totalRuns) * 10000) / 100 : 0;
+
+      // Calculate average duration from completed runs
+      const completedRuns = workflowRuns.filter(r => r.status === 'completed' && r.completedAt && r.startedAt);
+      const avgDurationMs = completedRuns.length > 0
+        ? Math.round(completedRuns.reduce((sum, r) => sum + ((r.completedAt ?? 0) - r.startedAt), 0) / completedRuns.length)
+        : undefined;
+
+      // Gate wait statistics
+      const gateWaitStats = this.computeGateWaitStats(workflowRuns);
+
+      // Failure type distribution
+      const failureTypes = this.computeFailureTypeDistribution(workflowRuns);
+
+      // Recent runs
+      const recentRuns = this.buildRecentRunSummaries(workflowRuns, limit);
+
+      // Eval summary (placeholder - would need eval data source)
+      const evalSummary = this.computeEvalSummary(workflowRuns);
+
+      return {
+        workflowId,
+        workflowName,
+        totalRuns,
+        successCount,
+        failureCount,
+        activeCount,
+        successRate,
+        failureRate,
+        avgDurationMs,
+        gateWaitStats,
+        failureTypes,
+        evalSummary,
+        recentRuns,
+        computedAt: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get quality summaries for all workflows.
+   */
+  getAllWorkflowQualitySummaries(limit = 10): WorkflowQualitySummary[] {
+    const allRuns = this.stateManager.listRuns();
+    const workflowIds = [...new Set(allRuns.map(r => r.workflowId))];
+
+    const summaries: WorkflowQualitySummary[] = [];
+    for (const workflowId of workflowIds) {
+      const summary = this.getWorkflowQualitySummary(workflowId, limit);
+      if (summary) {
+        summaries.push(summary);
+      }
+    }
+
+    return summaries;
   }
 
   // ===========================================================================
@@ -462,8 +567,22 @@ export class DiagnosticsService {
     failedNodes: FailedNodeDetail[],
     downstreamImpact: DownstreamImpactNode[],
     errorSummary: ErrorSummary[],
+    recoveryScope?: { reusedCount: number; rerunCount: number; riskLevel: 'low' | 'medium' | 'high'; summary: string },
   ): RecommendedAction[] {
     const actions: RecommendedAction[] = [];
+
+    // Add recover action (M3) - only for failed runs with recoverable steps
+    if (recoveryScope && recoveryScope.rerunCount > 0) {
+      const riskLabel = recoveryScope.riskLevel === 'low' ? 'low risk' :
+                        recoveryScope.riskLevel === 'medium' ? 'medium risk' : 'high risk';
+      actions.push({
+        type: 'recover',
+        priority: 'high',
+        title: 'Smart Recovery',
+        description: `Reuse ${recoveryScope.reusedCount} completed step(s), re-run ${recoveryScope.rerunCount} failed step(s). ${recoveryScope.summary} (${riskLabel})`,
+        targetRunId: runId,
+      });
+    }
 
     // Add rerun action
     if (failedNodes.length > 0) {
@@ -537,6 +656,73 @@ export class DiagnosticsService {
       seenTypes.add(action.type);
       return true;
     });
+  }
+
+  /**
+   * Compute recovery scope for a failed run.
+   * This is a simplified version of the recovery analysis that provides
+   * a quick preview without full dependency resolution.
+   */
+  private computeRecoveryScope(
+    run: RunState,
+    workflowConfig?: WorkflowConfig,
+  ): { reusedCount: number; rerunCount: number; invalidatedCount: number; riskLevel: 'low' | 'medium' | 'high'; summary: string } | undefined {
+    if (run.status !== 'failed') {
+      return undefined;
+    }
+
+    // Find failed node IDs
+    const failedNodeIds = this.findFailedNodeIds(run.steps);
+    if (failedNodeIds.length === 0) {
+      return undefined;
+    }
+
+    const classification = classifyRecoverySteps(run.steps, workflowConfig?.steps ?? [], {
+      resumeFromStep: failedNodeIds[0],
+      requireOutputForReuse: false,
+    });
+    const reusedCount = classification.reused.length;
+    const rerunCount = classification.rerun.length + classification.invalidated.length;
+    const invalidatedCount = classification.invalidated.length;
+
+    // Calculate risk level based on rerun ratio
+    const totalRelevant = reusedCount + rerunCount;
+    const rerunRatio = totalRelevant > 0 ? rerunCount / totalRelevant : 0;
+
+    // Check for gate warnings
+    let hasGateWarning = false;
+    if (workflowConfig) {
+      for (const stepId of [...classification.rerun, ...classification.invalidated].map((step) => step.stepId)) {
+        const stepConfig = workflowConfig.steps.find((s) => s.id === stepId);
+        if (stepConfig?.gate === 'approve') {
+          hasGateWarning = true;
+          break;
+        }
+      }
+    }
+
+    let riskLevel: 'low' | 'medium' | 'high';
+    if (rerunRatio > 0.5 || hasGateWarning) {
+      riskLevel = 'high';
+    } else if (rerunRatio < 0.2 && !hasGateWarning) {
+      riskLevel = 'low';
+    } else {
+      riskLevel = 'medium';
+    }
+
+    // Generate summary
+    let summary: string;
+    if (reusedCount === 0 && rerunCount === 0) {
+      summary = 'No steps to recover';
+    } else if (reusedCount === 0) {
+      summary = `All ${rerunCount} step(s) will be re-executed`;
+    } else if (rerunCount === 0) {
+      summary = `All ${reusedCount} step(s) can be reused`;
+    } else {
+      summary = `${reusedCount} step(s) reused, ${rerunCount} step(s) will execute again`;
+    }
+
+    return { reusedCount, rerunCount, invalidatedCount, riskLevel, summary };
   }
 
   private mapNodeStatus(status?: string): NodeStatus {
@@ -620,5 +806,113 @@ export class DiagnosticsService {
     }
 
     return states;
+  }
+
+  private computeGateWaitStats(
+    runs: Array<{ runId: string; status: string; steps: Record<string, { status: string; startedAt?: number }> }>,
+  ): GateWaitStats {
+    let totalGateWaits = 0;
+    let runsWithGateWait = 0;
+    let lastGateWaitAt: number | undefined;
+
+    for (const run of runs) {
+      let runGateWaitCount = 0;
+      for (const step of Object.values(run.steps)) {
+        if (step.status === 'gate_waiting') {
+          totalGateWaits++;
+          runGateWaitCount++;
+          if (step.startedAt && (!lastGateWaitAt || step.startedAt > lastGateWaitAt)) {
+            lastGateWaitAt = step.startedAt;
+          }
+        }
+      }
+      if (runGateWaitCount > 0) {
+        runsWithGateWait++;
+      }
+    }
+
+    return { totalGateWaits, runsWithGateWait, lastGateWaitAt };
+  }
+
+  private computeFailureTypeDistribution(
+    runs: Array<{ steps: Record<string, { status: string; error?: string }> }>,
+  ): FailureTypeDistribution[] {
+    const errorTypeCounts = new Map<string, number>();
+    let totalFailedRuns = 0;
+
+    for (const run of runs) {
+      if (run.steps) {
+        for (const step of Object.values(run.steps)) {
+          if (step.status === 'failed' && step.error) {
+            const errorType = this.classifyError(step.error as string);
+            errorTypeCounts.set(errorType, (errorTypeCounts.get(errorType) ?? 0) + 1);
+          }
+        }
+      }
+    }
+
+    totalFailedRuns = Array.from(errorTypeCounts.values()).reduce((sum, count) => sum + count, 0);
+
+    const distribution: FailureTypeDistribution[] = [];
+    for (const [errorType, count] of errorTypeCounts.entries()) {
+      distribution.push({
+        errorType,
+        count,
+        percentage: totalFailedRuns > 0 ? Math.round((count / totalFailedRuns) * 10000) / 100 : 0,
+      });
+    }
+
+    // Sort by count descending
+    distribution.sort((a, b) => b.count - a.count);
+
+    return distribution;
+  }
+
+  private classifyError(errorMessage: string): string {
+    for (const mapping of ERROR_MAPPINGS) {
+      if (mapping.pattern.test(errorMessage)) {
+        return mapping.type;
+      }
+    }
+    return 'UnknownError';
+  }
+
+  private buildRecentRunSummaries(
+    runs: Array<{ runId: string; status: string; startedAt: number; completedAt?: number; steps: Record<string, { status: string; error?: string }> }>,
+    limit: number,
+  ): QualityRunSummary[] {
+    // Sort by startedAt descending
+    const sorted = [...runs].sort((a, b) => b.startedAt - a.startedAt);
+
+    return sorted.slice(0, limit).map(run => {
+      let errorType: string | undefined;
+      if (run.status === 'failed') {
+        for (const step of Object.values(run.steps)) {
+          if (step.status === 'failed' && step.error) {
+            errorType = this.classifyError(step.error as string);
+            break;
+          }
+        }
+      }
+
+      return {
+        runId: run.runId,
+        status: run.status as QualityRunSummary['status'],
+        startedAt: run.startedAt,
+        completedAt: run.completedAt,
+        durationMs: run.completedAt ? run.completedAt - run.startedAt : undefined,
+        errorType,
+      };
+    });
+  }
+
+  private computeEvalSummary(
+    runs: Array<{ runId: string; status: string }>,
+  ): EvalSummary | undefined {
+    // This is a placeholder - in a real implementation, we would load eval data
+    // from eval results stored for each run. For now, return undefined to indicate
+    // eval data is not available.
+    // TODO: Integrate with eval runner to load actual eval scores
+    return undefined;
   }
 }

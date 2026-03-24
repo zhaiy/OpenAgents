@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
 
 import type { WebAppContext } from '../app/context.js';
-import type { GateActionRequestDto, RunStartRequestDto, ApiErrorCode, ApiErrorResponse } from '../app/dto.js';
+import type { GateActionRequestDto, RecoveryRequestDto, RunStartRequestDto, ApiErrorCode, ApiErrorResponse } from '../app/dto.js';
 
 // =============================================================================
 // Response Helpers
@@ -422,6 +422,74 @@ export class WebRouter {
       }
 
       // =======================================================================
+      // Runs - Recovery (M1 - Node-Level Recovery)
+      // =======================================================================
+
+      // GET /api/runs/:runId/recovery-preview - Preview what recovery would do
+      match = matchRoute(method, 'GET', pathname, /^\/api\/runs\/([^/]+)\/recovery-preview$/);
+      if (match) {
+        const runId = decodeParam(match, 1);
+        try {
+          // Parse query params for optional recovery options
+          const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
+          const resumeFromStep = parsed.searchParams.get('resumeFromStep') ?? undefined;
+          const reuseStepsStr = parsed.searchParams.get('reuseSteps');
+          const forceRerunStepsStr = parsed.searchParams.get('forceRerunSteps');
+
+          const recoveryRequest: RecoveryRequestDto = {
+            sourceRunId: runId,
+            resumeFromStep,
+            reuseSteps: reuseStepsStr ? reuseStepsStr.split(',') : undefined,
+            forceRerunSteps: forceRerunStepsStr ? forceRerunStepsStr.split(',') : undefined,
+          };
+
+          const preview = this.context.runReuseService.getRecoveryPreview(recoveryRequest);
+          if (!preview) {
+            sendNotFound(res, 'Run not found or not a failed run');
+            return true;
+          }
+          sendJson(res, 200, preview);
+        } catch (error) {
+          sendValidationError(res, error instanceof Error ? error.message : String(error));
+        }
+        return true;
+      }
+
+      // POST /api/runs/:runId/recover - Execute recovery
+      match = matchRoute(method, 'POST', pathname, /^\/api\/runs\/([^/]+)\/recover$/);
+      if (match) {
+        const runId = decodeParam(match, 1);
+        try {
+          const body = await parseJsonBody<RecoveryRequestDto>(req);
+          const recoveryRequest: RecoveryRequestDto = {
+            sourceRunId: runId,
+            resumeFromStep: body.resumeFromStep,
+            reuseSteps: body.reuseSteps,
+            forceRerunSteps: body.forceRerunSteps,
+            inputData: body.inputData,
+            runtimeOptions: body.runtimeOptions,
+          };
+
+          const payload = this.context.runReuseService.createRecoveryPayload(recoveryRequest);
+          if (!payload) {
+            sendNotFound(res, 'Run not found or not a failed run');
+            return true;
+          }
+          const newRun = this.context.runService.startRun(payload);
+          sendJson(res, 200, {
+            newRunId: newRun.runId,
+            sourceRunId: runId,
+            status: 'running',
+            reusedStepIds: payload.recoveryOptions?.useCachedSteps ?? [],
+            rerunStepIds: payload.recoveryOptions?.forceRerunSteps ?? [],
+          });
+        } catch (error) {
+          sendValidationError(res, error instanceof Error ? error.message : String(error));
+        }
+        return true;
+      }
+
+      // =======================================================================
       // Diagnostics
       // =======================================================================
 
@@ -434,6 +502,34 @@ export class WebRouter {
       if (matchRoute(method, 'GET', pathname, /^\/api\/diagnostics\/waiting-gates$/)) {
         const waitingGates = this.context.diagnosticsService.getWaitingGatesSummary();
         sendJson(res, 200, waitingGates);
+        return true;
+      }
+
+      match = matchRoute(method, 'GET', pathname, /^\/api\/diagnostics\/quality-summaries$/);
+      if (match) {
+        const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
+        const limit = Number.parseInt(parsed.searchParams.get('limit') ?? '10', 10);
+        const summaries = this.context.diagnosticsService.getAllWorkflowQualitySummaries(
+          Number.isFinite(limit) && limit > 0 ? limit : 10,
+        );
+        sendJson(res, 200, summaries);
+        return true;
+      }
+
+      match = matchRoute(method, 'GET', pathname, /^\/api\/diagnostics\/workflows\/([^/]+)\/quality$/);
+      if (match) {
+        const workflowId = decodeParam(match, 1);
+        const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
+        const limit = Number.parseInt(parsed.searchParams.get('limit') ?? '10', 10);
+        const summary = this.context.diagnosticsService.getWorkflowQualitySummary(
+          workflowId,
+          Number.isFinite(limit) && limit > 0 ? limit : 10,
+        );
+        if (!summary) {
+          sendNotFound(res, 'Workflow quality summary not found');
+          return true;
+        }
+        sendJson(res, 200, summary);
         return true;
       }
 

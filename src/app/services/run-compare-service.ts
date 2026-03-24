@@ -11,6 +11,7 @@ import type {
   RunComparisonSessionDto,
   TokenUsage,
 } from '../dto.js';
+import { aggregateTokenUsage, computeDurationOrNow, computePercentChange } from './run-metrics.js';
 
 /**
  * Default session TTL: 30 minutes
@@ -333,17 +334,13 @@ export class RunCompareService {
     runA: { startedAt: number; completedAt?: number },
     runB: { startedAt: number; completedAt?: number },
   ): DurationDiff | undefined {
-    const durationA = runA.completedAt
-      ? runA.completedAt - runA.startedAt
-      : Date.now() - runA.startedAt;
-    const durationB = runB.completedAt
-      ? runB.completedAt - runB.startedAt
-      : Date.now() - runB.startedAt;
+    const durationA = computeDurationOrNow(runA.startedAt, runA.completedAt);
+    const durationB = computeDurationOrNow(runB.startedAt, runB.completedAt);
 
     if (durationA === durationB) return undefined;
 
     const delta = durationB - durationA;
-    const percentChange = durationA > 0 ? (delta / durationA) * 100 : undefined;
+    const percentChange = computePercentChange(durationB, durationA);
 
     return {
       runA: durationA,
@@ -546,21 +543,15 @@ export class RunCompareService {
   private sumTokenUsage(
     steps: Record<string, { tokenUsage?: TokenUsage }>,
   ): TokenUsage | undefined {
-    let promptTokens = 0;
-    let completionTokens = 0;
-    let totalTokens = 0;
-
-    for (const step of Object.values(steps)) {
-      if (step.tokenUsage) {
-        promptTokens += step.tokenUsage.promptTokens ?? 0;
-        completionTokens += step.tokenUsage.completionTokens ?? 0;
-        totalTokens += step.tokenUsage.totalTokens ?? 0;
-      }
+    const aggregated = aggregateTokenUsage(steps);
+    if (!aggregated.hasUsage || aggregated.totalTokens === 0) {
+      return undefined;
     }
-
-    if (totalTokens === 0) return undefined;
-
-    return { promptTokens, completionTokens, totalTokens };
+    return {
+      promptTokens: aggregated.promptTokens,
+      completionTokens: aggregated.completionTokens,
+      totalTokens: aggregated.totalTokens,
+    };
   }
 
   private truncatePreview(text: string): string {

@@ -91,6 +91,77 @@ afterEach(() => {
 });
 
 describe('WorkflowEngine integration', () => {
+  it('reuses completed recovery steps instead of executing them again', async () => {
+    const root = createTempProject();
+    write(
+      path.join(root, 'agents/worker.yaml'),
+      `agent:
+  id: worker
+  name: Worker
+  description: reusable worker
+prompt:
+  system: run
+runtime:
+  type: llm-direct
+  model: qwen-plus
+  timeout_seconds: 5
+`,
+    );
+    write(
+      path.join(root, 'workflows/recovery-demo.yaml'),
+      `workflow:
+  id: recovery-demo
+  name: Recovery Demo
+  description: recovery execution test
+steps:
+  - id: step1
+    agent: worker
+    task: first
+  - id: step2
+    agent: worker
+    depends_on: [step1]
+    task: second
+output:
+  directory: ./output
+`,
+    );
+
+    const calls: string[] = [];
+    let shouldFailStep2 = true;
+    const runtimeFactory = (_type: RuntimeType, _projectConfig: ProjectConfig, agentConfig?: AgentConfig): AgentRuntime => ({
+      execute: async ({ userPrompt }): Promise<ExecuteResult> => {
+        calls.push(userPrompt);
+        if (userPrompt === 'second' && shouldFailStep2) {
+          shouldFailStep2 = false;
+          throw new Error('step2 failed');
+        }
+        return { output: `${agentConfig?.agent.id}:${userPrompt}`, duration: 1 };
+      },
+    });
+    const { engine, stateManager } = createEngine(root, runtimeFactory);
+
+    await expect(engine.run('recovery-demo', 'input')).rejects.toThrow('step2 failed');
+    const failedRun = stateManager.listRuns({ workflowId: 'recovery-demo' }).find((run) => run.status === 'failed');
+    expect(failedRun).toBeDefined();
+    expect(failedRun!.steps.step1.outputFile).toBeDefined();
+
+    calls.length = 0;
+
+    const recovered = await engine.run('recovery-demo', 'input', {
+      runId: 'recovery_run',
+      sourceRunId: failedRun!.runId,
+      recoveryInfo: {
+        reusedStepIds: ['step1'],
+        rerunStepIds: ['step2'],
+      },
+    });
+
+    expect(recovered.status).toBe('completed');
+    expect(calls).toEqual(['second']);
+    expect(recovered.steps.step1.status).toBe('completed');
+    expect(recovered.steps.step1.outputFile).toBe(failedRun!.steps.step1.outputFile);
+  });
+
   it('renders skills in system prompt and injects processed context into user prompt', async () => {
     const root = createTempProject();
     write(

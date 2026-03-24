@@ -17,10 +17,13 @@ import type {
   RunStartResponseDto,
   RunSummaryDto,
   WebRunEvent,
+  RunCostSummary,
+  StepCostInfo,
 } from '../dto.js';
 import { RunEventEmitter } from '../events/run-event-emitter.js';
 import { WebEventHandler } from '../events/web-event-handler.js';
 import { RunRegistry } from './run-registry.js';
+import { aggregateTokenUsage, computeDuration } from './run-metrics.js';
 
 interface RunServiceDeps {
   loader: ConfigLoader;
@@ -39,11 +42,22 @@ export class RunService {
   startRun(request: RunStartRequestDto): RunStartResponseDto {
     const runId = this.deps.stateManager.generateRunId();
     const { engine, eventHandler } = this.buildWebEngine({ autoApprove: request.autoApprove });
+
+    // Extract recovery info from request if present
+    const recoveryInfo = request.recoveryOptions
+      ? {
+          reusedStepIds: request.recoveryOptions.useCachedSteps ?? [],
+          rerunStepIds: request.recoveryOptions.forceRerunSteps ?? [],
+        }
+      : undefined;
+
     const runPromise = engine.run(request.workflowId, request.input, {
       runId,
       inputData: request.inputData,
       stream: request.stream ?? true,
       noEval: request.noEval,
+      sourceRunId: request.sourceRunId,
+      recoveryInfo,
     });
     this.deps.runRegistry.register({
       runId,
@@ -94,6 +108,12 @@ export class RunService {
         durationMs,
         stepCount: stepStates.length,
         completedStepCount: stepStates.filter((step) => step.status === 'completed').length,
+        recoveredFrom: run.sourceRunId ? {
+          runId: run.sourceRunId,
+          recoveredAt: run.startedAt,
+          reusedStepIds: run.recoveryInfo?.reusedStepIds ?? [],
+          rerunStepIds: run.recoveryInfo?.rerunStepIds ?? [],
+        } : undefined,
       };
     });
   }
@@ -108,6 +128,12 @@ export class RunService {
     // Calculate total token usage from all steps
     const tokenUsage = this.calculateTotalTokenUsage(run.steps);
 
+    // Build step names map from workflow config (M5)
+    const stepNames = this.buildStepNamesMap(run.workflowId);
+
+    // Compute cost summary (M5)
+    const costSummary = this.computeRunCostSummary(run.steps, stepNames);
+
     // Transform steps from Record to Array with frontend-compatible field names
     const stepsArray = Object.entries(run.steps).map(([stepId, step]) => {
       let output: string | undefined;
@@ -121,7 +147,7 @@ export class RunService {
 
       return {
         stepId,
-        name: stepId, // stepId serves as the name when no separate name exists
+        name: stepNames[stepId] ?? stepId,
         status: step.status,
         startedAt: step.startedAt,
         completedAt: step.completedAt,
@@ -144,6 +170,13 @@ export class RunService {
       durationMs,
       tokenUsage,
       steps: stepsArray,
+      recoveredFrom: run.sourceRunId ? {
+        runId: run.sourceRunId,
+        recoveredAt: run.startedAt,
+        reusedStepIds: run.recoveryInfo?.reusedStepIds ?? [],
+        rerunStepIds: run.recoveryInfo?.rerunStepIds ?? [],
+      } : undefined,
+      costSummary,
     };
   }
 
@@ -173,6 +206,23 @@ export class RunService {
     return fs.readFileSync(filePath, 'utf8');
   }
 
+  /**
+   * Build a map of stepId -> stepName from workflow config.
+   * M5: Used for cost attribution.
+   */
+  private buildStepNamesMap(workflowId: string): Record<string, string> {
+    try {
+      const workflow = this.deps.loader.loadWorkflow(workflowId);
+      const map: Record<string, string> = {};
+      for (const step of workflow.steps) {
+        map[step.id] = step.metadata?.displayName ?? step.id;
+      }
+      return map;
+    } catch {
+      return {};
+    }
+  }
+
   getRunEval(runId: string): unknown {
     const run = this.deps.stateManager.findRunById(runId);
     const projectConfig = this.deps.loader.loadProjectConfig();
@@ -195,24 +245,86 @@ export class RunService {
   }
 
   private calculateTotalTokenUsage(steps: Record<string, { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens: number } }>): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
-    const stepValues = Object.values(steps);
-    if (stepValues.length === 0) return undefined;
+    const aggregated = aggregateTokenUsage(steps);
+    return aggregated.hasUsage
+      ? {
+          promptTokens: aggregated.promptTokens,
+          completionTokens: aggregated.completionTokens,
+          totalTokens: aggregated.totalTokens,
+        }
+      : undefined;
+  }
 
-    let promptTokens = 0;
-    let completionTokens = 0;
+  /**
+   * Compute cost summary for a run, identifying high-cost steps.
+   * M5: Cost observation capability.
+   */
+  private computeRunCostSummary(
+    steps: Record<string, { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens: number }; durationMs?: number }>,
+    stepNames?: Record<string, string>,
+  ): RunCostSummary | undefined {
+    const stepEntries = Object.entries(steps);
+
+    // Calculate totals
     let totalTokens = 0;
-    let hasUsage = false;
+    let totalDurationMs = 0;
+    const stepCosts: StepCostInfo[] = [];
 
-    for (const step of stepValues) {
-      if (step.tokenUsage) {
-        hasUsage = true;
-        promptTokens += step.tokenUsage.promptTokens ?? 0;
-        completionTokens += step.tokenUsage.completionTokens ?? 0;
-        totalTokens += step.tokenUsage.totalTokens;
+    for (const [stepId, step] of stepEntries) {
+      const tokens = step.tokenUsage?.totalTokens;
+      const durationMs = step.durationMs;
+
+      if (tokens !== undefined) {
+        totalTokens += tokens;
+      }
+      if (durationMs !== undefined) {
+        totalDurationMs += durationMs;
+      }
+
+      // Only include steps with actual cost data
+      if (tokens !== undefined || durationMs !== undefined) {
+        stepCosts.push({
+          stepId,
+          name: stepNames?.[stepId] ?? stepId,
+          tokens,
+          durationMs,
+        });
       }
     }
 
-    return hasUsage ? { promptTokens, completionTokens, totalTokens } : undefined;
+    // If no cost data, return undefined
+    if (totalTokens === 0 && totalDurationMs === 0) {
+      return undefined;
+    }
+
+    // Calculate percentages and sort
+    const sortedByTokens = [...stepCosts]
+      .filter(s => s.tokens !== undefined)
+      .map(s => ({
+        ...s,
+        percentTokens: totalTokens > 0 ? Math.round((s.tokens! / totalTokens) * 10000) / 100 : undefined,
+      }))
+      .sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0));
+
+    const sortedByDuration = [...stepCosts]
+      .filter(s => s.durationMs !== undefined)
+      .map(s => ({
+        ...s,
+        percentDuration: totalDurationMs > 0 ? Math.round((s.durationMs! / totalDurationMs) * 10000) / 100 : undefined,
+      }))
+      .sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0));
+
+    const tokenMeasuredSteps = stepEntries.filter(([, s]) => s.tokenUsage?.totalTokens !== undefined).length;
+    const durationMeasuredSteps = stepEntries.filter(([, s]) => s.durationMs !== undefined).length;
+
+    return {
+      totalTokens: totalTokens > 0 ? totalTokens : undefined,
+      totalDurationMs: totalDurationMs > 0 ? totalDurationMs : undefined,
+      topTokensSteps: sortedByTokens.slice(0, 5), // Top 5 by tokens
+      topDurationSteps: sortedByDuration.slice(0, 5), // Top 5 by duration
+      avgTokensPerStep: tokenMeasuredSteps > 0 ? Math.round(totalTokens / tokenMeasuredSteps) : undefined,
+      avgDurationMsPerStep: durationMeasuredSteps > 0 ? Math.round(totalDurationMs / durationMeasuredSteps) : undefined,
+    };
   }
 
   private buildWebEngine(opts?: { autoApprove?: boolean }): { engine: WorkflowEngine; eventHandler: WebEventHandler } {

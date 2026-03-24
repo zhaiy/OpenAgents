@@ -47,6 +47,13 @@ export interface RunSummaryDto {
   stepCount: number;
   completedStepCount: number;
   score?: number;
+  /** Information about the run this was recovered from, if any */
+  recoveredFrom?: {
+    runId: string;
+    recoveredAt: number;
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
 }
 
 export interface RunDetailDto {
@@ -61,6 +68,15 @@ export interface RunDetailDto {
   durationMs?: number;
   tokenUsage?: TokenUsage;
   steps: RunDetailStepDto[];
+  /** Information about the run this was recovered from, if any */
+  recoveredFrom?: {
+    runId: string;
+    recoveredAt: number;
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
+  /** Cost summary identifying high-cost steps (M5) */
+  costSummary?: RunCostSummary;
 }
 
 export interface RunDetailStepDto {
@@ -77,6 +93,44 @@ export interface RunDetailStepDto {
     completionTokens?: number;
     totalTokens: number;
   };
+}
+
+// =============================================================================
+// Cost Observation DTOs (M5)
+// =============================================================================
+
+/**
+ * Information about a single step's cost contribution.
+ */
+export interface StepCostInfo {
+  stepId: string;
+  name: string;
+  /** Total tokens used by this step */
+  tokens?: number;
+  /** Duration of this step in milliseconds */
+  durationMs?: number;
+  /** Percentage of total run tokens (0-100) */
+  percentTokens?: number;
+  /** Percentage of total run duration (0-100) */
+  percentDuration?: number;
+}
+
+/**
+ * Cost summary for a run, including identification of high-cost steps.
+ */
+export interface RunCostSummary {
+  /** Total tokens used by the run (sum of all steps) */
+  totalTokens?: number;
+  /** Total duration of the run in milliseconds */
+  totalDurationMs?: number;
+  /** Steps with highest token consumption, sorted descending */
+  topTokensSteps: StepCostInfo[];
+  /** Steps with longest duration, sorted descending */
+  topDurationSteps: StepCostInfo[];
+  /** Average tokens per step */
+  avgTokensPerStep?: number;
+  /** Average duration per step */
+  avgDurationMsPerStep?: number;
 }
 
 export interface PendingGateDto {
@@ -281,7 +335,7 @@ export interface FailurePropagation {
 }
 
 export interface RecommendedAction {
-  type: 'rerun' | 'rerun_with_edits' | 'fix_config' | 'check_api' | 'retry' | 'contact_support';
+  type: 'rerun' | 'rerun_with_edits' | 'recover' | 'fix_config' | 'check_api' | 'retry' | 'contact_support';
   priority: 'high' | 'medium' | 'low';
   title: string;
   description: string;
@@ -309,11 +363,107 @@ export interface DiagnosticsSummaryDto {
   errorSummary: ErrorSummary[];
   upstreamStates: Record<string, NodeStatus>;
   recommendedActions: RecommendedAction[];
+  /** Recovery scope preview for failed runs - computed from dependency analysis */
+  recoveryScope?: {
+    /** Number of steps that would be reused from source run */
+    reusedCount: number;
+    /** Number of steps that would be re-executed */
+    rerunCount: number;
+    /** Number of steps that would be invalidated (downstream of rerun steps) */
+    invalidatedCount: number;
+    /** Risk level of the recovery operation */
+    riskLevel: 'low' | 'medium' | 'high';
+    /** Summary description of what recovery would do */
+    summary: string;
+  };
 }
 
 // =============================================================================
-// Run Comparison DTOs (N7 Enhancement)
+// Quality Observation DTOs (M6)
 // =============================================================================
+
+/**
+ * Summary of a single recent run for quality tracking.
+ */
+export interface QualityRunSummary {
+  runId: string;
+  status: 'completed' | 'failed' | 'running' | 'interrupted';
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  /** Primary error type if failed */
+  errorType?: string;
+}
+
+/**
+ * Failure type distribution within a workflow.
+ */
+export interface FailureTypeDistribution {
+  errorType: string;
+  count: number;
+  percentage: number;
+}
+
+/**
+ * Gate waiting statistics for a workflow.
+ */
+export interface GateWaitStats {
+  /** Total number of gate waits across all runs */
+  totalGateWaits: number;
+  /** Number of runs that had at least one gate wait */
+  runsWithGateWait: number;
+  /** Most recent gate wait timestamp */
+  lastGateWaitAt?: number;
+}
+
+/**
+ * Eval summary for a workflow (if eval is enabled).
+ */
+export interface EvalSummary {
+  /** Number of runs with eval results */
+  runsWithEval: number;
+  /** Average eval score across runs with eval */
+  avgScore?: number;
+  /** Most recent eval score */
+  lastScore?: number;
+  /** Score trend: 'improving' | 'declining' | 'stable' | 'insufficient_data' */
+  trend?: 'improving' | 'declined' | 'stable' | 'insufficient_data';
+}
+
+/**
+ * Workflow-level quality summary aggregating multiple runs.
+ * M6: Quality observation capability.
+ */
+export interface WorkflowQualitySummary {
+  /** Workflow identifier */
+  workflowId: string;
+  /** Workflow name (if available) */
+  workflowName?: string;
+  /** Total number of runs for this workflow */
+  totalRuns: number;
+  /** Number of successful runs */
+  successCount: number;
+  /** Number of failed runs */
+  failureCount: number;
+  /** Running or interrupted runs */
+  activeCount: number;
+  /** Success rate as percentage (0-100) */
+  successRate: number;
+  /** Failure rate as percentage (0-100) */
+  failureRate: number;
+  /** Average duration of completed runs in milliseconds */
+  avgDurationMs?: number;
+  /** Gate waiting statistics */
+  gateWaitStats: GateWaitStats;
+  /** Failure type distribution (sorted by count descending) */
+  failureTypes: FailureTypeDistribution[];
+  /** Eval summary (if available) */
+  evalSummary?: EvalSummary;
+  /** Most recent runs for quick display */
+  recentRuns: QualityRunSummary[];
+  /** Timestamp when this summary was computed */
+  computedAt: number;
+}
 
 export type InputDiffType = 'added' | 'removed' | 'changed' | 'type_changed';
 
@@ -513,6 +663,7 @@ export interface InputDiffItem {
 /**
  * Recovery options for partial run recovery.
  * Reserved for future node-level recovery support.
+ * @deprecated Use RecoveryRequestDto for node-level recovery instead.
  */
 export interface RecoveryOptions {
   /** Resume from a specific step (skip completed steps) */
@@ -521,6 +672,118 @@ export interface RecoveryOptions {
   useCachedSteps?: string[];
   /** Force re-run specific steps */
   forceRerunSteps?: string[];
+}
+
+// =============================================================================
+// Recovery DTOs (M1 - Node-Level Recovery)
+// =============================================================================
+
+/**
+ * Request to recover a failed run by selectively reusing completed nodes
+ * and re-running failed/downstream nodes.
+ */
+export interface RecoveryRequestDto {
+  /** Source run ID to recover from (must be failed) */
+  sourceRunId: string;
+  /** Step to resume from. Defaults to first failed step. */
+  resumeFromStep?: string;
+  /** Explicit list of steps to reuse (completed steps with valid outputs).
+   * If not provided, inferred from resumeFromStep and dependency graph. */
+  reuseSteps?: string[];
+  /** Explicit list of steps to force re-run even if completed.
+   * Useful when step logic needs to change. */
+  forceRerunSteps?: string[];
+  /** Input data overrides for the recovery run.
+   * If provided, creates a derived run with modified input. */
+  inputData?: Record<string, unknown>;
+  /** Runtime options overrides */
+  runtimeOptions?: RuntimeOptions;
+}
+
+/**
+ * Step-level recovery classification for preview.
+ */
+export type RecoverableStepType =
+  /** Step output will be reused from source run */
+  | 'reused'
+  /** Step will be re-executed */
+  | 'rerun'
+  /** Step result becomes invalid due to upstream changes */
+  | 'invalidated'
+  /** Step status unchanged but downstream may be affected */
+  | 'at_risk';
+
+/**
+ * Preview of a single step's recovery status.
+ */
+export interface RecoveryStepPreview {
+  stepId: string;
+  stepName?: string;
+  /** Current status in source run */
+  currentStatus: StepStatus;
+  /** Classification in recovery run */
+  recoveryAction: RecoverableStepType;
+  /** Reason for the action */
+  reason: string;
+}
+
+/**
+ * Downstream impact warning for recovery preview.
+ */
+export interface RecoveryImpactWarning {
+  stepId: string;
+  stepName?: string;
+  impactType: 'gate_reset' | 'eval_reset' | 'output_invalidated' | 'blocked';
+  description: string;
+}
+
+/**
+ * Preview response showing what a recovery operation would do.
+ */
+export interface RecoveryPreviewDto {
+  /** Source run info */
+  sourceRun: {
+    runId: string;
+    status: 'failed';
+    failedAt: number;
+    failedNodeIds: string[];
+  };
+  /** Workflow info */
+  workflow: {
+    workflowId: string;
+    name: string;
+    stepCount: number;
+  };
+  /** Steps that will be reused (completed with valid outputs) */
+  reusedSteps: RecoveryStepPreview[];
+  /** Steps that will be re-run */
+  rerunSteps: RecoveryStepPreview[];
+  /** Steps that become invalidated */
+  invalidatedSteps: RecoveryStepPreview[];
+  /** Steps at risk (unchanged but may have downstream effects) */
+  atRiskSteps: RecoveryStepPreview[];
+  /** Warnings about gates, evals, and downstream impacts */
+  warnings: RecoveryImpactWarning[];
+  /** Risk level of the recovery operation */
+  riskLevel: 'low' | 'medium' | 'high';
+  /** Summary description */
+  summary: string;
+}
+
+/**
+ * Result of a recovery operation.
+ */
+export interface RecoveryResultDto {
+  /** New run created by recovery */
+  newRunId: string;
+  /** Source run that was recovered from */
+  sourceRunId: string;
+  /** Status of the new run request */
+  status: 'running';
+  /** Steps that were reused from source run */
+  reusedStepIds: string[];
+  /** Steps that were re-run */
+  rerunStepIds: string[];
 }
 
 export interface RunStartRequestDto {

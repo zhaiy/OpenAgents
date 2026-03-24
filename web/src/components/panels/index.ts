@@ -9,3 +9,6 @@ export type { MetricCardProps } from './MetricCard';
 
 export { WarningCallout } from './WarningCallout';
 export type { WarningCalloutProps, WarningType } from './WarningCallout';
+
+export { RecoveryPreviewPanel } from './RecoveryPreviewPanel';
+export type { RecoveryPreviewPanelProps } from './RecoveryPreviewPanel';

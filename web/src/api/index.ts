@@ -110,6 +110,13 @@ export interface RunSummary {
   stepCount: number;
   completedStepCount: number;
   score?: number;
+  /** Information about the run this was recovered from, if any */
+  recoveredFrom?: {
+    runId: string;
+    recoveredAt: number;
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
 }
 
 export interface RunDetail {
@@ -124,6 +131,15 @@ export interface RunDetail {
   durationMs?: number;
   tokenUsage?: TokenUsage;
   steps: Step[];
+  /** Information about the run this was recovered from, if any */
+  recoveredFrom?: {
+    runId: string;
+    recoveredAt: number;
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
+  /** Cost summary identifying high-cost steps (M5) */
+  costSummary?: RunCostSummary;
 }
 
 export interface Step {
@@ -136,6 +152,77 @@ export interface Step {
   output?: string;
   error?: string;
   tokenUsage?: TokenUsage;
+}
+
+// =============================================================================
+// Cost Observation Types (M5)
+// =============================================================================
+
+export interface StepCostInfo {
+  stepId: string;
+  name: string;
+  tokens?: number;
+  durationMs?: number;
+  percentTokens?: number;
+  percentDuration?: number;
+}
+
+export interface RunCostSummary {
+  totalTokens?: number;
+  totalDurationMs?: number;
+  topTokensSteps: StepCostInfo[];
+  topDurationSteps: StepCostInfo[];
+  avgTokensPerStep?: number;
+  avgDurationMsPerStep?: number;
+}
+
+// =============================================================================
+// Quality Observation Types (M6)
+// =============================================================================
+
+export interface QualityRunSummary {
+  runId: string;
+  status: 'completed' | 'failed' | 'running' | 'interrupted';
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  errorType?: string;
+}
+
+export interface FailureTypeDistribution {
+  errorType: string;
+  count: number;
+  percentage: number;
+}
+
+export interface GateWaitStats {
+  totalGateWaits: number;
+  runsWithGateWait: number;
+  lastGateWaitAt?: number;
+}
+
+export interface EvalSummary {
+  runsWithEval: number;
+  avgScore?: number;
+  lastScore?: number;
+  trend?: 'improving' | 'declined' | 'stable' | 'insufficient_data';
+}
+
+export interface WorkflowQualitySummary {
+  workflowId: string;
+  workflowName?: string;
+  totalRuns: number;
+  successCount: number;
+  failureCount: number;
+  activeCount: number;
+  successRate: number;
+  failureRate: number;
+  avgDurationMs?: number;
+  gateWaitStats: GateWaitStats;
+  failureTypes: FailureTypeDistribution[];
+  evalSummary?: EvalSummary;
+  recentRuns: QualityRunSummary[];
+  computedAt: number;
 }
 
 export interface RunEvent {
@@ -438,6 +525,23 @@ export const runApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(edits || {}),
     }),
+  // Recovery API (M1 - Node-Level Recovery)
+  getRecoveryPreview: (runId: string, options?: { resumeFromStep?: string; reuseSteps?: string[]; forceRerunSteps?: string[] }) => {
+    const params = new URLSearchParams();
+    if (options?.resumeFromStep) params.set('resumeFromStep', options.resumeFromStep);
+    if (options?.reuseSteps?.length) params.set('reuseSteps', options.reuseSteps.join(','));
+    if (options?.forceRerunSteps?.length) params.set('forceRerunSteps', options.forceRerunSteps.join(','));
+    const query = params.toString();
+    return request<RecoveryPreview>(
+      `/runs/${encodeURIComponent(runId)}/recovery-preview${query ? `?${query}` : ''}`
+    );
+  },
+  recover: (runId: string, recoveryRequest: RecoveryRequest) =>
+    request<RecoveryResult>(`/runs/${encodeURIComponent(runId)}/recover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(recoveryRequest),
+    }),
 };
 
 // Rerun types - aligned with backend DTO
@@ -486,6 +590,67 @@ export interface RerunPreview {
     new: boolean;
   }>;
   warnings?: string[];
+}
+
+// =============================================================================
+// Recovery Types (M1 - Node-Level Recovery)
+// =============================================================================
+
+export type StepStatus = 'pending' | 'running' | 'gate_waiting' | 'completed' | 'failed' | 'interrupted' | 'skipped';
+
+export type RecoverableStepType = 'reused' | 'rerun' | 'invalidated' | 'at_risk';
+
+export interface RecoveryStepPreview {
+  stepId: string;
+  stepName?: string;
+  currentStatus: StepStatus;
+  recoveryAction: RecoverableStepType;
+  reason: string;
+}
+
+export interface RecoveryImpactWarning {
+  stepId: string;
+  stepName?: string;
+  impactType: 'gate_reset' | 'eval_reset' | 'output_invalidated' | 'blocked';
+  description: string;
+}
+
+export interface RecoveryPreview {
+  sourceRun: {
+    runId: string;
+    status: 'failed';
+    failedAt: number;
+    failedNodeIds: string[];
+  };
+  workflow: {
+    workflowId: string;
+    name: string;
+    stepCount: number;
+  };
+  reusedSteps: RecoveryStepPreview[];
+  rerunSteps: RecoveryStepPreview[];
+  invalidatedSteps: RecoveryStepPreview[];
+  atRiskSteps: RecoveryStepPreview[];
+  warnings: RecoveryImpactWarning[];
+  riskLevel: 'low' | 'medium' | 'high';
+  summary: string;
+}
+
+export interface RecoveryRequest {
+  sourceRunId: string;
+  resumeFromStep?: string;
+  reuseSteps?: string[];
+  forceRerunSteps?: string[];
+  inputData?: Record<string, unknown>;
+  runtimeOptions?: RuntimeOptions;
+}
+
+export interface RecoveryResult {
+  newRunId: string;
+  sourceRunId: string;
+  status: 'running';
+  reusedStepIds: string[];
+  rerunStepIds: string[];
 }
 
 export const settingsApi = {
@@ -568,7 +733,7 @@ export interface FailurePropagation {
 }
 
 export interface RecommendedAction {
-  type: 'rerun' | 'rerun_with_edits' | 'fix_config' | 'check_api' | 'retry' | 'contact_support';
+  type: 'rerun' | 'rerun_with_edits' | 'recover' | 'fix_config' | 'check_api' | 'retry' | 'contact_support';
   priority: 'high' | 'medium' | 'low';
   title: string;
   description: string;
@@ -589,6 +754,14 @@ export interface DiagnosticsSummary {
   errorSummary: Array<{ nodeId: string; errorType: string; errorMessage: string; suggestedActions: string[] }>;
   upstreamStates: Record<string, NodeStatus>;
   recommendedActions: RecommendedAction[];
+  /** Recovery scope preview for failed runs - computed from dependency analysis */
+  recoveryScope?: {
+    reusedCount: number;
+    rerunCount: number;
+    invalidatedCount: number;
+    riskLevel: 'low' | 'medium' | 'high';
+    summary: string;
+  };
 }
 
 // Diagnostics API methods
@@ -603,6 +776,14 @@ export const diagnosticsApi = {
     ),
   getRunDiagnostics: (runId: string) =>
     request<DiagnosticsSummary>(`/diagnostics/runs/${encodeURIComponent(runId)}`),
+  getWorkflowQualitySummary: (workflowId: string, limit?: number) =>
+    request<WorkflowQualitySummary>(`/diagnostics/workflows/${encodeURIComponent(workflowId)}/quality`, {
+      params: { limit },
+    }),
+  listWorkflowQualitySummaries: (limit?: number) =>
+    request<WorkflowQualitySummary[]>('/diagnostics/quality-summaries', {
+      params: { limit },
+    }),
 };
 
 // Comparison API

@@ -1,8 +1,9 @@
 /**
- * DiagnosticsPage - T21
+ * DiagnosticsPage - T21 / M3
  *
  * Diagnostics dashboard showing failed runs, waiting gates,
  * and detailed run diagnostics with suggested actions.
+ * M3 adds recovery preview and risk indication.
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +14,7 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Card } from '../components/ui/Card';
 import { WarningCallout } from '../components/panels/WarningCallout';
+import { RecoveryPreviewPanel } from '../components/panels/RecoveryPreviewPanel';
 
 type TabType = 'failed' | 'waiting';
 
@@ -82,6 +84,13 @@ export default function DiagnosticsPage() {
   const handleAction = (action: RecommendedAction) => {
     if (action.type === 'rerun' || action.type === 'rerun_with_edits') {
       navigate(`/runs/${action.targetRunId}/rerun`);
+    } else if (action.type === 'recover') {
+      // Navigate to workflow run page with recovery mode
+      if (selectedRunId && diagnosticsDetail) {
+        navigate(`/workflows/${diagnosticsDetail.workflowId}/run`, {
+          state: { sourceRunId: action.targetRunId, mode: 'recovery' },
+        });
+      }
     } else if (action.type === 'check_api') {
       navigate('/settings');
     }
@@ -484,6 +493,15 @@ function DiagnosticsDetail({ diagnostics, onAction, t }: DiagnosticsDetailProps)
         </div>
       )}
 
+      {/* Recovery Preview Panel - M3 */}
+      {diagnostics.recoveryScope && (
+        <RecoveryPreviewPanel
+          runId={diagnostics.runId}
+          initialPreview={diagnostics.recoveryScope}
+          compact={false}
+        />
+      )}
+
       {/* Recommended Actions */}
       {diagnostics.recommendedActions.length > 0 && (
         <div>
@@ -506,13 +524,15 @@ function DiagnosticsDetail({ diagnostics, onAction, t }: DiagnosticsDetailProps)
                   </div>
                   <p className="text-xs text-muted">{action.description}</p>
                 </div>
-                {(action.type === 'rerun' || action.type === 'rerun_with_edits' || action.type === 'check_api') && (
+                {(action.type === 'rerun' || action.type === 'rerun_with_edits' || action.type === 'recover' || action.type === 'check_api') && (
                   <Button
-                    variant="secondary"
+                    variant={action.type === 'recover' ? 'primary' : 'secondary'}
                     size="sm"
                     onClick={() => onAction(action)}
                   >
-                    {action.type === 'check_api' ? t('diagnostics.goToSettings') : t('diagnostics.takeAction')}
+                    {action.type === 'check_api' ? t('diagnostics.goToSettings') :
+                     action.type === 'recover' ? (t('diagnostics.recover') || 'Recover') :
+                     t('diagnostics.takeAction')}
                   </Button>
                 )}
               </div>

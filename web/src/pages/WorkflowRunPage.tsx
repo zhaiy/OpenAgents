@@ -21,6 +21,7 @@ import { workflowApi, runApi, draftApi, visualApi, ApiError } from '../api';
 import type { ConfigDraft, InputSchemaField } from '../api';
 import { NotFoundState } from '../components/ui/NotFoundState';
 import { ErrorState } from '../components/ui/ErrorState';
+import { RecoveryPreviewPanel } from '../components/panels/RecoveryPreviewPanel';
 
 type InputMode = 'text' | 'json' | 'fromPrevious' | 'draft';
 const DEFAULT_RUNTIME_OPTIONS_KEY = 'openagents.defaultRuntimeOptions';
@@ -36,6 +37,8 @@ export default function WorkflowRunPage() {
 
   // Check if this is a rerun (from previous run config)
   const sourceRunId = location.state?.sourceRunId as string | undefined;
+  // Check if this is a recovery (M3)
+  const isRecoveryMode = location.state?.mode === 'recovery';
 
   const [inputMode, setInputMode] = useState<InputMode>('json');
   const [input, setInput] = useState('');
@@ -135,6 +138,12 @@ export default function WorkflowRunPage() {
     [sourceRunId]
   );
 
+  // Fetch recovery preview if in recovery mode (M3)
+  const { data: recoveryPreview } = useApi(
+    () => sourceRunId && isRecoveryMode ? runApi.getRecoveryPreview(sourceRunId) : Promise.resolve(null),
+    [sourceRunId, isRecoveryMode]
+  );
+
   // Pre-fill form when reusable config is loaded
   useEffect(() => {
     if (reusableConfig) {
@@ -167,12 +176,42 @@ export default function WorkflowRunPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     clearError();
+
     // For JSON mode, show pre-run summary instead of direct submit (T17)
     if (inputMode === 'json' && !jsonError) {
       handleOpenPreRunSummary();
       return;
     }
     if (!workflowId || (inputMode === 'json' && jsonError)) return;
+
+    // Recovery mode submission (M3)
+    if (isRecoveryMode && sourceRunId) {
+      setIsSubmitting(true);
+      try {
+        let inputData: Record<string, unknown> | undefined;
+        if (inputMode === 'json') {
+          try {
+            inputData = JSON.parse(inputJson);
+          } catch {
+            inputData = {};
+          }
+        }
+
+        const result = await runApi.recover(sourceRunId, {
+          sourceRunId,
+          inputData,
+          runtimeOptions: { stream: streaming, autoApprove, noEval },
+        });
+        navigate(`/runs/${result.newRunId}/execute`);
+      } catch (err) {
+        setError(err);
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    // Normal submission
     setIsSubmitting(true);
     try {
       let inputData: Record<string, unknown> | undefined;
@@ -431,6 +470,24 @@ export default function WorkflowRunPage() {
               {isSubmitting ? t('rerun.running') : t('rerun.rerunSame')}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Recovery Preview Panel - M3 */}
+      {isRecoveryMode && sourceRunId && (
+        <div className="mb-6">
+          <RecoveryPreviewPanel
+            runId={sourceRunId}
+            initialPreview={recoveryPreview ? {
+              reusedCount: recoveryPreview.reusedSteps?.length ?? 0,
+              rerunCount: recoveryPreview.rerunSteps?.length ?? 0,
+              invalidatedCount: recoveryPreview.invalidatedSteps?.length ?? 0,
+              riskLevel: recoveryPreview.riskLevel ?? 'medium',
+              summary: recoveryPreview.summary ?? '',
+            } : undefined}
+            expanded={true}
+            compact={false}
+          />
         </div>
       )}
 

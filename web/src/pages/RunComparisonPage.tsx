@@ -83,6 +83,13 @@ export default function RunComparisonPage() {
     navigate(`/runs/${runId}/execute`);
   };
 
+  // Handle recovery for a failed run (M3)
+  const handleRecover = (runId: string, workflowId: string) => {
+    navigate(`/workflows/${workflowId}/run`, {
+      state: { sourceRunId: runId, mode: 'recovery' },
+    });
+  };
+
   const formatDuration = (ms?: number) => {
     if (!ms) return '-';
     if (ms < 1000) return `${ms}ms`;
@@ -147,6 +154,16 @@ export default function RunComparisonPage() {
                   <div>{t('comparison.createdAt')}: {new Date(runA.startedAt).toLocaleString()}</div>
                   {runA.durationMs && <div>{t('comparison.duration')}: {formatDuration(runA.durationMs)}</div>}
                 </div>
+                {runA.status === 'failed' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => handleRecover(runA.runId, runA.workflowId)}
+                  >
+                    {t('comparison.recover') || 'Recover'}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -170,6 +187,16 @@ export default function RunComparisonPage() {
                   <div>{t('comparison.createdAt')}: {new Date(runB.startedAt).toLocaleString()}</div>
                   {runB.durationMs && <div>{t('comparison.duration')}: {formatDuration(runB.durationMs)}</div>}
                 </div>
+                {runB.status === 'failed' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => handleRecover(runB.runId, runB.workflowId)}
+                  >
+                    {t('comparison.recover') || 'Recover'}
+                  </Button>
+                )}
               </div>
             )}
           </div>

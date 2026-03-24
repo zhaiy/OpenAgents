@@ -190,6 +190,13 @@ export interface RunState {
   startedAt: number;
   completedAt?: number;
   steps: Record<string, StepState>;
+  /** Source run ID if this run was created via recovery/rerun */
+  sourceRunId?: string;
+  /** Recovery metadata if this run was created via recovery */
+  recoveryInfo?: {
+    reusedStepIds: string[];
+    rerunStepIds: string[];
+  };
 }
 
 export type EventType =

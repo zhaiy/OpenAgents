@@ -55,12 +55,17 @@ const mockDiagnosticsService = {
   getFailedRunsSummary: vi.fn(),
   getWaitingGatesSummary: vi.fn(),
   getRunDiagnostics: vi.fn(),
+  getWorkflowQualitySummary: vi.fn(),
+  getAllWorkflowQualitySummaries: vi.fn(),
 };
 
 const mockRunReuseService = {
   getReusableConfig: vi.fn(),
   createRerunPayload: vi.fn(),
   createEditedRerunPayload: vi.fn(),
+  getRecoveryPreview: vi.fn(),
+  createRecoveryPayload: vi.fn(),
+  getRecoveryResult: vi.fn(),
 };
 
 const mockRunEventEmitter = {
@@ -240,12 +245,18 @@ describe('WebRouter', () => {
       mockDiagnosticsService.getFailedRunsSummary.mockReturnValue([]);
       mockDiagnosticsService.getWaitingGatesSummary.mockReturnValue([]);
       mockDiagnosticsService.getRunDiagnostics.mockReturnValue({ runId: 'run1' });
+      mockDiagnosticsService.getAllWorkflowQualitySummaries.mockReturnValue([]);
+      mockDiagnosticsService.getWorkflowQualitySummary.mockReturnValue({ workflowId: 'wf1' });
       await router.handle(createMockRequest('GET', '/api/diagnostics/failed-runs'), createMockResponse().res);
       await router.handle(createMockRequest('GET', '/api/diagnostics/waiting-gates'), createMockResponse().res);
       await router.handle(createMockRequest('GET', '/api/diagnostics/runs/run1'), createMockResponse().res);
+      await router.handle(createMockRequest('GET', '/api/diagnostics/quality-summaries?limit=5'), createMockResponse().res);
+      await router.handle(createMockRequest('GET', '/api/diagnostics/workflows/wf1/quality?limit=3'), createMockResponse().res);
       expect(mockDiagnosticsService.getFailedRunsSummary).toHaveBeenCalled();
       expect(mockDiagnosticsService.getWaitingGatesSummary).toHaveBeenCalled();
       expect(mockDiagnosticsService.getRunDiagnostics).toHaveBeenCalledWith('run1');
+      expect(mockDiagnosticsService.getAllWorkflowQualitySummaries).toHaveBeenCalledWith(5);
+      expect(mockDiagnosticsService.getWorkflowQualitySummary).toHaveBeenCalledWith('wf1', 3);
     });
   });
 
@@ -319,6 +330,227 @@ describe('WebRouter', () => {
       expect(mockRunReuseService.createRerunPayload).toHaveBeenCalledWith('run1');
       expect(mockRunReuseService.createEditedRerunPayload).toHaveBeenCalledWith('run1', { q: 1 }, { autoApprove: true });
       expect(mockRunService.startRun).toHaveBeenCalledTimes(2);
+    });
+
+    it('handles recovery preview and recover routes', async () => {
+      mockRunReuseService.getRecoveryPreview.mockReturnValue({
+        sourceRun: { runId: 'run1', status: 'failed', failedAt: Date.now(), failedNodeIds: ['step2'] },
+        workflow: { workflowId: 'wf1', name: 'Test', stepCount: 2 },
+        reusedSteps: [{ stepId: 'step1', currentStatus: 'completed', recoveryAction: 'reused', reason: 'Completed' }],
+        rerunSteps: [{ stepId: 'step2', currentStatus: 'failed', recoveryAction: 'rerun', reason: 'Failed' }],
+        invalidatedSteps: [],
+        atRiskSteps: [],
+        warnings: [],
+        riskLevel: 'medium',
+        summary: 'Will reuse 1 step(s) from source run.',
+      });
+      mockRunReuseService.createRecoveryPayload.mockReturnValue({
+        workflowId: 'wf1',
+        input: 'test',
+        inputData: {},
+        sourceRunId: 'run1',
+        recoveryOptions: { resumeFromStep: 'step2', useCachedSteps: ['step1'] },
+      });
+      mockRunReuseService.getRecoveryResult.mockReturnValue({
+        newRunId: 'run-recovered',
+        sourceRunId: 'run1',
+        status: 'running',
+        reusedStepIds: ['step1'],
+        rerunStepIds: ['step2'],
+      });
+      mockRunService.startRun.mockReturnValue({ runId: 'run-recovered', status: 'running' });
+
+      // Test GET /api/runs/:runId/recovery-preview
+      await router.handle(createMockRequest('GET', '/api/runs/run1/recovery-preview'), createMockResponse().res);
+      expect(mockRunReuseService.getRecoveryPreview).toHaveBeenCalled();
+
+      // Test GET /api/runs/:runId/recovery-preview with query params
+      await router.handle(createMockRequest('GET', '/api/runs/run1/recovery-preview?resumeFromStep=step2'), createMockResponse().res);
+      expect(mockRunReuseService.getRecoveryPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sourceRunId: 'run1', resumeFromStep: 'step2' })
+      );
+
+      // Test POST /api/runs/:runId/recover
+      const postReq = createMockRequest('POST', '/api/runs/run1/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({ sourceRunId: 'run1', resumeFromStep: 'step2' }));
+      };
+      await router.handle(postReq, createMockResponse().res);
+      expect(mockRunReuseService.createRecoveryPayload).toHaveBeenCalled();
+      expect(mockRunService.startRun).toHaveBeenCalled();
+    });
+
+    it('returns NOT_FOUND when recovery preview on non-existent run', async () => {
+      mockRunReuseService.getRecoveryPreview.mockReturnValue(null);
+
+      const req = createMockRequest('GET', '/api/runs/nonexistent/recovery-preview');
+      const { res, data } = createMockResponse();
+      await router.handle(req, res);
+
+      const response = JSON.parse(String(data[0]));
+      expect(response).toHaveProperty('error');
+      expect(response.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns NOT_FOUND when recover on non-existent run', async () => {
+      mockRunReuseService.createRecoveryPayload.mockReturnValue(null);
+
+      const postReq = createMockRequest('POST', '/api/runs/nonexistent/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({ sourceRunId: 'nonexistent' }));
+      };
+      const { res, data } = createMockResponse();
+      await router.handle(postReq, res);
+
+      const response = JSON.parse(String(data[0]));
+      expect(response).toHaveProperty('error');
+      expect(response.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns NOT_FOUND when recovery preview returns null (non-failed run)', async () => {
+      mockRunReuseService.getRecoveryPreview.mockReturnValue(null);
+
+      const req = createMockRequest('GET', '/api/runs/completed-run/recovery-preview');
+      const { res, data } = createMockResponse();
+      await router.handle(req, res);
+
+      const response = JSON.parse(String(data[0]));
+      expect(response).toHaveProperty('error');
+      expect(response.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns NOT_FOUND when createRecoveryPayload returns null', async () => {
+      mockRunReuseService.createRecoveryPayload.mockReturnValue(null);
+
+      const postReq = createMockRequest('POST', '/api/runs/run1/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({ sourceRunId: 'run1' }));
+      };
+      const { res, data } = createMockResponse();
+      await router.handle(postReq, res);
+
+      const response = JSON.parse(String(data[0]));
+      expect(response).toHaveProperty('error');
+      expect(response.error.code).toBe('NOT_FOUND');
+    });
+
+    it('parses recovery preview query parameters correctly', async () => {
+      mockRunReuseService.getRecoveryPreview.mockReturnValue({
+        sourceRun: { runId: 'run1', status: 'failed', failedAt: Date.now(), failedNodeIds: ['step2'] },
+        workflow: { workflowId: 'wf1', name: 'Test', stepCount: 3 },
+        reusedSteps: [],
+        rerunSteps: [],
+        invalidatedSteps: [],
+        atRiskSteps: [],
+        warnings: [],
+        riskLevel: 'medium',
+        summary: 'Test',
+      });
+
+      await router.handle(
+        createMockRequest('GET', '/api/runs/run1/recovery-preview?resumeFromStep=step2&reuseSteps=step1,step2&forceRerunSteps=step3'),
+        createMockResponse().res
+      );
+
+      expect(mockRunReuseService.getRecoveryPreview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceRunId: 'run1',
+          resumeFromStep: 'step2',
+          reuseSteps: ['step1', 'step2'],
+          forceRerunSteps: ['step3'],
+        })
+      );
+    });
+
+    it('handles recovery request with inputData override', async () => {
+      mockRunReuseService.createRecoveryPayload.mockReturnValue({
+        workflowId: 'wf1',
+        input: 'test',
+        inputData: { query: 'modified query' },
+        sourceRunId: 'run1',
+        recoveryOptions: { resumeFromStep: 'step2', useCachedSteps: ['step1'], forceRerunSteps: [] },
+      });
+      mockRunService.startRun.mockReturnValue({ runId: 'run-recovered', status: 'running' });
+
+      const postReq = createMockRequest('POST', '/api/runs/run1/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({
+          sourceRunId: 'run1',
+          resumeFromStep: 'step2',
+          inputData: { query: 'modified query' },
+        }));
+      };
+      const { res, data } = createMockResponse();
+      await router.handle(postReq, res);
+
+      expect(mockRunReuseService.createRecoveryPayload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceRunId: 'run1',
+          resumeFromStep: 'step2',
+          inputData: { query: 'modified query' },
+        })
+      );
+    });
+
+    it('handles recovery request with runtimeOptions override', async () => {
+      mockRunReuseService.createRecoveryPayload.mockReturnValue({
+        workflowId: 'wf1',
+        input: 'test',
+        inputData: {},
+        sourceRunId: 'run1',
+        stream: false,
+        autoApprove: true,
+        noEval: false,
+        recoveryOptions: { resumeFromStep: 'step2', useCachedSteps: [], forceRerunSteps: [] },
+      });
+      mockRunService.startRun.mockReturnValue({ runId: 'run-recovered', status: 'running' });
+
+      const postReq = createMockRequest('POST', '/api/runs/run1/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({
+          sourceRunId: 'run1',
+          runtimeOptions: { autoApprove: true },
+        }));
+      };
+      const { res, data } = createMockResponse();
+      await router.handle(postReq, res);
+
+      expect(mockRunReuseService.createRecoveryPayload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceRunId: 'run1',
+          runtimeOptions: { autoApprove: true },
+        })
+      );
+    });
+
+    it('returns recovery result with sourceRunId after successful recovery', async () => {
+      mockRunReuseService.createRecoveryPayload.mockReturnValue({
+        workflowId: 'wf1',
+        input: 'test',
+        inputData: {},
+        sourceRunId: 'run1',
+        recoveryOptions: { resumeFromStep: 'step2', useCachedSteps: ['step1'], forceRerunSteps: [] },
+      });
+      mockRunService.startRun.mockReturnValue({ runId: 'run-recovered', status: 'running' });
+      mockRunReuseService.getRecoveryResult.mockReturnValue({
+        newRunId: 'run-recovered',
+        sourceRunId: 'run1',
+        status: 'running',
+        reusedStepIds: ['step1'],
+        rerunStepIds: ['step2'],
+      });
+
+      const postReq = createMockRequest('POST', '/api/runs/run1/recover') as http.IncomingMessage;
+      (postReq as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+        yield Buffer.from(JSON.stringify({ sourceRunId: 'run1' }));
+      };
+      const { res, data } = createMockResponse();
+      await router.handle(postReq, res);
+
+      const response = JSON.parse(String(data[0]));
+      expect(response.newRunId).toBe('run-recovered');
+      expect(response.sourceRunId).toBe('run1');
+      expect(response.status).toBe('running');
     });
   });
 

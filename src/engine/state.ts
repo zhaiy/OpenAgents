@@ -124,7 +124,17 @@ export class StateManager {
     return path.join(this.outputDir, workflowId, runId);
   }
 
-  initRun(runId: string, workflowId: string, input: string, stepIds: string[], inputData?: Record<string, unknown>): RunState {
+  initRun(
+    runId: string,
+    workflowId: string,
+    input: string,
+    stepIds: string[],
+    inputData?: Record<string, unknown>,
+    options?: {
+      sourceRunId?: string;
+      recoveryInfo?: { reusedStepIds: string[]; rerunStepIds: string[] };
+    },
+  ): RunState {
     const runDir = this.getRunDir(workflowId, runId);
     fs.mkdirSync(runDir, { recursive: true });
 
@@ -141,6 +151,8 @@ export class StateManager {
       inputData,
       startedAt: Date.now(),
       steps,
+      sourceRunId: options?.sourceRunId,
+      recoveryInfo: options?.recoveryInfo,
     };
 
     atomicWriteJson(path.join(runDir, STATE_FILE), state);

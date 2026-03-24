@@ -77,3 +77,43 @@ test.describe('Web UI Smoke Tests', () => {
     await expect(page.locator('text=Default Runtime Options')).toBeVisible();
   });
 });
+
+// =============================================================================
+// Recovery Path Smoke Tests (M4)
+// =============================================================================
+
+test.describe('Recovery Path Smoke Tests', () => {
+  test('diagnostics page loads with tabs', async ({ page }) => {
+    await page.goto('/diagnostics');
+    // Should show Failed Runs tab
+    await expect(page.locator('text=Failed Runs').first()).toBeVisible();
+    // Should show Waiting Gates tab
+    await expect(page.locator('text=Waiting Gates').first()).toBeVisible();
+  });
+
+  test('diagnostics page shows refresh button', async ({ page }) => {
+    await page.goto('/diagnostics');
+    // Refresh button should exist
+    await expect(page.locator('button:has-text("Refresh")').first()).toBeVisible();
+  });
+
+  test('diagnostics page shows quick links section', async ({ page }) => {
+    await page.goto('/diagnostics');
+    // Quick links section should be visible
+    await expect(page.locator('text=Quick Links').first()).toBeVisible();
+  });
+
+  test('runs comparison page loads with run inputs', async ({ page }) => {
+    await page.goto('/runs');
+    // Compare section should have Run A and Run B inputs
+    await expect(page.locator('input[placeholder="Run A ID"]')).toBeVisible();
+    await expect(page.locator('input[placeholder="Run B ID"]')).toBeVisible();
+  });
+
+  test('navigation to diagnostics from runs page', async ({ page }) => {
+    await page.goto('/runs');
+    // There should be a way to navigate to diagnostics - via quick links or nav
+    await page.click('text=Diagnostics');
+    await expect(page).toHaveURL(/\/diagnostics/);
+  });
+});
