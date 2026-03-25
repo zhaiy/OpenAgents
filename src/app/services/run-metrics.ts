@@ -50,6 +50,25 @@ export function aggregateTokenUsage(
 }
 
 /**
+ * Aggregate token usage and return as optional TokenUsage.
+ * Returns undefined if no step had token usage data or total is zero.
+ * Convenience wrapper around aggregateTokenUsage for callers that prefer optional return type.
+ */
+export function aggregateTokenUsageOptional(
+  steps: Record<string, { tokenUsage?: TokenUsage }> | Array<{ tokenUsage?: TokenUsage }>,
+): TokenUsage | undefined {
+  const result = aggregateTokenUsage(steps);
+  if (!result.hasUsage || result.totalTokens === 0) {
+    return undefined;
+  }
+  return {
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
+    totalTokens: result.totalTokens,
+  };
+}
+
+/**
  * Compute duration from start and completion timestamps.
  * Returns undefined if completedAt is not available.
  */

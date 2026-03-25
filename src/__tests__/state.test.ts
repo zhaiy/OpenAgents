@@ -47,6 +47,41 @@ describe('StateManager', () => {
     expect(fs.existsSync(tmpFile)).toBe(false);
   });
 
+  it('persists workflow snapshot and source relationship metadata', () => {
+    const { manager } = makeManager();
+    const state = manager.initRun(
+      'run_1',
+      'wf_1',
+      'input',
+      ['step_a'],
+      { foo: 'bar' },
+      {
+        sourceRunId: 'run_source',
+        sourceRunRelationship: 'rerun_with_edits',
+        workflowSnapshot: {
+          workflowId: 'wf_1',
+          versionHash: 'hash_123',
+          capturedAt: 123456,
+          steps: {
+            step_a: {
+              id: 'step_a',
+              agent: { id: 'agent_a', name: 'Agent A', runtimeType: 'llm-direct' },
+              systemPrompt: 'prompt',
+              task: 'task',
+              dependsOn: [],
+              gate: 'auto',
+            },
+          },
+        },
+      },
+    );
+
+    const loaded = manager.loadRun(state.runId, state.workflowId);
+    expect(loaded.sourceRunRelationship).toBe('rerun_with_edits');
+    expect(loaded.workflowSnapshot?.versionHash).toBe('hash_123');
+    expect(loaded.workflowSnapshot?.steps.step_a.agent.id).toBe('agent_a');
+  });
+
   it('lists runs and supports filters', () => {
     const { manager } = makeManager();
     const run1 = manager.initRun('run_1', 'wf_1', 'input1', ['s1']);

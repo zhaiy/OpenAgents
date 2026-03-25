@@ -23,7 +23,7 @@ import type {
 import { RunEventEmitter } from '../events/run-event-emitter.js';
 import { WebEventHandler } from '../events/web-event-handler.js';
 import { RunRegistry } from './run-registry.js';
-import { aggregateTokenUsage, computeDuration } from './run-metrics.js';
+import { aggregateTokenUsageOptional, computeDuration } from './run-metrics.js';
 
 interface RunServiceDeps {
   loader: ConfigLoader;
@@ -58,6 +58,7 @@ export class RunService {
       noEval: request.noEval,
       sourceRunId: request.sourceRunId,
       recoveryInfo,
+      sourceRunRelationship: request.sourceRunRelationship,
     });
     this.deps.runRegistry.register({
       runId,
@@ -126,7 +127,7 @@ export class RunService {
       : undefined;
 
     // Calculate total token usage from all steps
-    const tokenUsage = this.calculateTotalTokenUsage(run.steps);
+    const tokenUsage = aggregateTokenUsageOptional(run.steps);
 
     // Build step names map from workflow config (M5)
     const stepNames = this.buildStepNamesMap(run.workflowId);
@@ -202,7 +203,12 @@ export class RunService {
     if (!step.outputFile) {
       throw new Error(`Step "${stepId}" has no output file`);
     }
-    const filePath = path.join(this.deps.stateManager.getRunDir(run.workflowId, runId), step.outputFile);
+    const runDir = this.deps.stateManager.getRunDir(run.workflowId, runId);
+    const filePath = path.resolve(runDir, step.outputFile);
+    const runDirPrefix = runDir.endsWith(path.sep) ? runDir : `${runDir}${path.sep}`;
+    if (!filePath.startsWith(runDirPrefix)) {
+      throw new Error(`Step "${stepId}" output file points outside run directory`);
+    }
     return fs.readFileSync(filePath, 'utf8');
   }
 
@@ -242,17 +248,6 @@ export class RunService {
     } catch {
       return workflowId;
     }
-  }
-
-  private calculateTotalTokenUsage(steps: Record<string, { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens: number } }>): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
-    const aggregated = aggregateTokenUsage(steps);
-    return aggregated.hasUsage
-      ? {
-          promptTokens: aggregated.promptTokens,
-          completionTokens: aggregated.completionTokens,
-          totalTokens: aggregated.totalTokens,
-        }
-      : undefined;
   }
 
   /**

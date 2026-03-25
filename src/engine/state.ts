@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { ConfigError } from '../errors.js';
-import type { RunState, RunStatus, StepState } from '../types/index.js';
+import type { RunState, RunStatus, SourceRunRelationship, StepState, WorkflowSnapshot } from '../types/index.js';
 
 const STATE_FILE = '.state.json';
 const RUN_INDEX_FILE = '.runs-index.json';
@@ -133,6 +133,8 @@ export class StateManager {
     options?: {
       sourceRunId?: string;
       recoveryInfo?: { reusedStepIds: string[]; rerunStepIds: string[] };
+      sourceRunRelationship?: SourceRunRelationship;
+      workflowSnapshot?: WorkflowSnapshot;
     },
   ): RunState {
     const runDir = this.getRunDir(workflowId, runId);
@@ -153,6 +155,8 @@ export class StateManager {
       steps,
       sourceRunId: options?.sourceRunId,
       recoveryInfo: options?.recoveryInfo,
+      sourceRunRelationship: options?.sourceRunRelationship,
+      workflowSnapshot: options?.workflowSnapshot,
     };
 
     atomicWriteJson(path.join(runDir, STATE_FILE), state);

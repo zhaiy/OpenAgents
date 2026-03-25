@@ -1,7 +1,29 @@
-import type { RunStatus, StepStatus, WorkflowConfig } from '../types/index.js';
+import type { RunStatus, StepStatus, TokenUsage, WorkflowConfig } from '../types/index.js';
 
-// Re-export RunStatus for convenience
+// Re-export types for convenience
 export type { RunStatus } from '../types/index.js';
+// TokenUsage is defined in types/index.ts - re-export for DTO layer use
+export type { TokenUsage } from '../types/index.js';
+
+// =============================================================================
+// DTO Category Overview
+// =============================================================================
+// DTOs in this file are categorized into three types:
+//
+// **Snapshot DTOs** - Point-in-time state capture
+//   RunSummaryDto, RunDetailDto, RunVisualStateDto, RunStepDto, DiagnosticsSnapshotDto
+//   Purpose: Capture current state at a specific moment
+//
+// **Trend DTOs** - Aggregated metrics over multiple runs
+//   WorkflowQualitySummary, QualityRunSummary, RunCostSummary, StepCostInfo
+//   Purpose: Aggregate and summarize over time (used by E3 historical trends)
+//
+// **Recap DTOs** - Post-run summaries and analysis
+//   RunComparisonDto, DiagnosticsSummaryDto, RecoveryPreviewDto, RunFailureAnalysisDto
+//   Purpose: Provide analysis after run completion (used by E4 failure recap, E5 linkage)
+//
+// Category markers are added to section headers below for clarity.
+// =============================================================================
 
 export interface WorkflowSummaryDto {
   id: string;
@@ -96,7 +118,7 @@ export interface RunDetailStepDto {
 }
 
 // =============================================================================
-// Cost Observation DTOs (M5)
+// Cost Observation DTOs (M5) - [Trend DTOs]
 // =============================================================================
 
 /**
@@ -188,7 +210,7 @@ export type WebRunEvent = WebRunEventBase &
   };
 
 // =============================================================================
-// Visual DTOs for v6 - Workflow Visualization
+// Visual DTOs for v6 - Workflow Visualization [Snapshot DTOs]
 // =============================================================================
 
 export type NodeStatus =
@@ -201,13 +223,6 @@ export type NodeStatus =
   | 'failed'
   | 'skipped'
   | 'cached';
-
-// TokenUsage compatible with types/index.ts
-export interface TokenUsage {
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens: number;
-}
 
 // Workflow Visual Summary DTOs
 
@@ -307,6 +322,59 @@ export interface TimelineEntry {
 
 // Diagnostics DTOs
 
+/**
+ * Diagnostics Snapshot - point-in-time run state for diagnostics.
+ * Category: Snapshot DTOs
+ * E7: Extracted from DiagnosticsSummaryDto for better separation of concerns.
+ */
+export interface DiagnosticsSnapshotDto {
+  /** Run identifier */
+  runId: string;
+  /** Workflow identifier */
+  workflowId: string;
+  /** Workflow name (if available) */
+  workflowName?: string;
+  /** Current run status */
+  runStatus: RunStatus;
+  /** IDs of failed nodes */
+  failedNodeIds: string[];
+  /** IDs of nodes waiting for gate approval */
+  gateWaitingNodeIds: string[];
+  /** Upstream states for each node */
+  upstreamStates: Record<string, NodeStatus>;
+}
+
+/**
+ * Run Failure Analysis - computed from DiagnosticsSnapshot.
+ * Category: Recap DTOs
+ * E7: Extracted from DiagnosticsSummaryDto for better separation of concerns.
+ */
+export interface RunFailureAnalysisDto {
+  /** Detailed information about failed nodes */
+  failedNodes: FailedNodeDetail[];
+  /** Downstream impact analysis */
+  downstreamImpact: DownstreamImpactNode[];
+  /** Failure propagation path (if applicable) */
+  failurePropagation?: FailurePropagation;
+  /** Error summary for each failed node */
+  errorSummary: ErrorSummary[];
+  /** Recommended actions based on analysis */
+  recommendedActions: RecommendedAction[];
+  /** E4: Structured failure recap summary */
+  failureRecap?: {
+    /** Brief summary of the failure */
+    summary: string;
+    /** Primary error type */
+    primaryErrorType: string;
+    /** Number of affected nodes (failed + downstream) */
+    totalAffectedNodes: number;
+    /** Whether this failure blocks downstream execution */
+    blocksExecution: boolean;
+    /** Key insight about the failure */
+    insight: string;
+  };
+}
+
 export interface FailedNodeDetail {
   nodeId: string;
   nodeName?: string;
@@ -376,10 +444,30 @@ export interface DiagnosticsSummaryDto {
     /** Summary description of what recovery would do */
     summary: string;
   };
+  /** E4: Structured failure recap summary for quick understanding */
+  failureRecap?: {
+    /** Brief summary of the failure */
+    summary: string;
+    /** Primary error type */
+    primaryErrorType: string;
+    /** Number of affected nodes (failed + downstream) */
+    totalAffectedNodes: number;
+    /** Whether this failure blocks downstream execution */
+    blocksExecution: boolean;
+    /** Key insight about the failure */
+    insight: string;
+  };
+  /** E4: Source run info if this was a recovery/rerun */
+  sourceRunInfo?: {
+    sourceRunId: string;
+    relationship: 'recover' | 'rerun' | 'rerun_with_edits';
+    reusedStepCount: number;
+    rerunStepCount: number;
+  };
 }
 
 // =============================================================================
-// Quality Observation DTOs (M6)
+// Quality Observation DTOs (M6) - [Trend DTOs]
 // =============================================================================
 
 /**
@@ -516,6 +604,90 @@ export interface OutputDiffItem {
   isIdentical: boolean;
 }
 
+// =============================================================================
+// Version Diff DTOs (E2)
+// =============================================================================
+
+/**
+ * Classification of a change's impact on the workflow.
+ * - 'execution_path': Affects how the workflow runs (structure, dependencies, agent type)
+ * - 'output_risk': Affects output quality/results without changing execution path (model, prompt)
+ * - 'both': Affects both execution and output
+ */
+export type ChangeImpactType = 'execution_path' | 'output_risk' | 'both';
+
+/**
+ * Represents a difference in a single node's configuration between runs.
+ */
+export interface NodeConfigDiff {
+  nodeId: string;
+  nodeName?: string;
+  /** Whether this node exists in only one workflow */
+  onlyIn?: 'A' | 'B';
+  /** Agent type changed */
+  agentChanged?: {
+    runA: string;
+    runB: string;
+  };
+  /** Model changed */
+  modelChanged?: {
+    runA?: string;
+    runB?: string;
+  };
+  /** System prompt changed */
+  promptChanged?: {
+    runA: string;
+    runB: string;
+    /** Whether the change is significant (could affect output) */
+    isSignificant: boolean;
+  };
+  /** Task description changed */
+  taskChanged?: {
+    runA: string;
+    runB: string;
+  };
+  /** Dependencies changed */
+  dependenciesChanged?: {
+    runA: string[];
+    runB: string[];
+    added: string[];
+    removed: string[];
+  };
+  /** Gate type changed */
+  gateChanged?: {
+    runA?: 'auto' | 'approve';
+    runB?: 'auto' | 'approve';
+  };
+  /** Overall impact classification */
+  impactType: ChangeImpactType;
+}
+
+/**
+ * Represents a structural difference in workflow configuration between runs.
+ */
+export interface WorkflowConfigDiff {
+  /** Whether the workflows are the same */
+  isSameConfig: boolean;
+  /** Version hashes if available */
+  versionHashA?: string;
+  versionHashB?: string;
+  /** Structural changes (nodes added/removed/reordered) */
+  structureDiff?: {
+    addedNodes: string[];
+    removedNodes: string[];
+    /** Nodes with different order in execution plan */
+    reorderedNodes?: string[];
+  };
+  /** Node-level configuration differences */
+  nodeDiffs: NodeConfigDiff[];
+  /** Summary of changes */
+  summary: {
+    totalChanges: number;
+    executionPathChanges: number;
+    outputRiskChanges: number;
+  };
+}
+
 export interface ComparisonSummary {
   /** Overall similarity score (0-100) based on input, nodes, and output */
   similarityScore: number;
@@ -525,6 +697,19 @@ export interface ComparisonSummary {
   recommendations: string[];
   /** Risk warnings */
   warnings: string[];
+  /** E2: Summary of version/configuration changes */
+  versionDiffSummary?: {
+    /** Whether workflow configurations differ */
+    hasConfigDiff: boolean;
+    /** Number of structural changes */
+    structuralChanges: number;
+    /** Number of agent/model/prompt changes */
+    configChanges: number;
+    /** Description of what changed */
+    changeDescription: string;
+    /** Impact assessment: what could be affected */
+    impactAssessment: string;
+  };
 }
 
 export interface RunComparisonDto {
@@ -536,6 +721,8 @@ export interface RunComparisonDto {
     name: string;
     isSameWorkflow: boolean;
   };
+  /** E2: Workflow configuration differences between runs */
+  workflowConfigDiff?: WorkflowConfigDiff;
   inputDiff?: InputDiff[];
   /** Summary of input differences */
   inputDiffSummary?: {
@@ -675,7 +862,7 @@ export interface RecoveryOptions {
 }
 
 // =============================================================================
-// Recovery DTOs (M1 - Node-Level Recovery)
+// Recovery DTOs (M1 - Node-Level Recovery) - [Recap DTOs]
 // =============================================================================
 
 /**
@@ -795,7 +982,14 @@ export interface RunStartRequestDto {
   noEval?: boolean;
   /** Source run ID for rerun tracking */
   sourceRunId?: string;
-  /** Recovery options for partial rerun (reserved for future use) */
+  /** Explicit relationship for source run provenance */
+  sourceRunRelationship?: 'recover' | 'rerun' | 'rerun_with_edits';
+  /**
+   * Recovery options for partial rerun.
+   * @deprecated Use RecoveryRequestDto + createRecoveryPayload() for recovery flows.
+   *             This field remains for backward compatibility with rerun-from-history flows.
+   *             Will be removed in a future version when rerun uses RecoveryRequestDto directly.
+   */
   recoveryOptions?: RecoveryOptions;
 }
 

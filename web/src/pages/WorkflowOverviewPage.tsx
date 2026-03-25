@@ -26,7 +26,7 @@ import '@xyflow/react/dist/style.css';
 
 import { useTranslation } from '../i18n';
 import { useApi } from '../hooks/useApi';
-import { visualApi, type WorkflowVisualNode } from '../api';
+import { visualApi, diagnosticsApi, type WorkflowVisualNode, type WorkflowQualitySummary } from '../api';
 import { adaptWorkflowToFlowNodes, adaptWorkflowToFlowEdges } from '../lib/graph';
 import { layoutDAG } from '../lib/graph';
 import { NodeCard } from '../components/nodes/NodeCard';
@@ -65,6 +65,12 @@ export default function WorkflowOverviewPage() {
   // Fetch workflow visual summary
   const { data: summary, isLoading, error } = useApi(
     () => workflowId ? visualApi.getWorkflowSummary(workflowId) : Promise.reject(new Error('No workflowId')),
+    [workflowId]
+  );
+
+  // Fetch workflow quality summary - E3
+  const { data: qualitySummary } = useApi(
+    () => workflowId ? diagnosticsApi.getWorkflowQualitySummary(workflowId) : Promise.resolve(null),
     [workflowId]
   );
 
@@ -107,6 +113,29 @@ export default function WorkflowOverviewPage() {
   const handleRun = () => {
     if (!workflowId) return;
     navigate(`/workflows/${workflowId}/run`);
+  };
+
+  // E3 - Quality trend helpers
+  const getTrendIcon = (trend?: 'improving' | 'declined' | 'stable' | 'insufficient_data') => {
+    switch (trend) {
+      case 'improving':
+        return { icon: '↗', color: 'text-green-600 dark:text-green-400', label: 'Improving' };
+      case 'declined':
+        return { icon: '↘', color: 'text-red-600 dark:text-red-400', label: 'Declining' };
+      case 'stable':
+        return { icon: '→', color: 'text-blue-600 dark:text-blue-400', label: 'Stable' };
+      default:
+        return { icon: '?', color: 'text-muted', label: 'Insufficient data' };
+    }
+  };
+
+  const formatDuration = (ms?: number) => {
+    if (!ms) return '-';
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s`;
   };
 
   if (isLoading) {
@@ -177,6 +206,62 @@ export default function WorkflowOverviewPage() {
               </>
             )}
           </div>
+
+          {/* Quality Trend - E3 */}
+          {qualitySummary && qualitySummary.totalRuns > 0 && (
+            <div className="mt-4 p-3 bg-surface rounded-lg border border-line">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  {/* Success Rate */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted">Success Rate</span>
+                    <span className={`text-lg font-semibold ${
+                      qualitySummary.successRate >= 80 ? 'text-green-600 dark:text-green-400' :
+                      qualitySummary.successRate >= 60 ? 'text-yellow-600 dark:text-yellow-400' :
+                      'text-red-600 dark:text-red-400'
+                    }`}>
+                      {qualitySummary.successRate.toFixed(0)}%
+                    </span>
+                    {qualitySummary.evalSummary?.trend && (
+                      <span className={`text-sm ${getTrendIcon(qualitySummary.evalSummary.trend).color}`} title={getTrendIcon(qualitySummary.evalSummary.trend).label}>
+                        {getTrendIcon(qualitySummary.evalSummary.trend).icon}
+                      </span>
+                    )}
+                  </div>
+                  {/* Runs count */}
+                  <div className="flex items-center gap-2 text-xs text-muted">
+                    <span>{qualitySummary.totalRuns} runs</span>
+                    {qualitySummary.avgDurationMs && (
+                      <>
+                        <span>·</span>
+                        <span>Avg {formatDuration(qualitySummary.avgDurationMs)}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {/* Failure indicator */}
+                  {qualitySummary.failureCount > 0 && (
+                    <Badge variant="error" className="text-xs">
+                      {qualitySummary.failureCount} failed
+                    </Badge>
+                  )}
+                  {/* Primary failure type */}
+                  {qualitySummary.failureTypes[0] && (
+                    <span className="text-xs text-muted truncate max-w-[120px]" title={qualitySummary.failureTypes[0].errorType}>
+                      {qualitySummary.failureTypes[0].errorType}
+                    </span>
+                  )}
+                  {/* Gate wait indicator */}
+                  {qualitySummary.gateWaitStats.totalGateWaits > 0 && (
+                    <Badge variant="warning" className="text-xs">
+                      🚧 {qualitySummary.gateWaitStats.totalGateWaits} gates
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 

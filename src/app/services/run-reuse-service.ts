@@ -154,6 +154,7 @@ export class RunReuseService {
       autoApprove: edits?.autoApprove ?? config.runtimeOptions.autoApprove,
       noEval: edits?.noEval ?? config.runtimeOptions.noEval,
       sourceRunId: runId,
+      sourceRunRelationship: edits?.sourceRunRelationship ?? 'rerun',
       recoveryOptions: edits?.recoveryOptions,
     };
   }
@@ -172,6 +173,7 @@ export class RunReuseService {
       stream: runtimeOptions?.stream,
       autoApprove: runtimeOptions?.autoApprove,
       noEval: runtimeOptions?.noEval,
+      sourceRunRelationship: 'rerun_with_edits',
     });
   }
 
@@ -412,6 +414,7 @@ export class RunReuseService {
         autoApprove: request.runtimeOptions?.autoApprove ?? config.runtimeOptions.autoApprove,
         noEval: request.runtimeOptions?.noEval ?? config.runtimeOptions.noEval,
         sourceRunId: request.sourceRunId,
+        sourceRunRelationship: 'recover',
         recoveryOptions: {
           resumeFromStep,
           useCachedSteps: recoveryOptions.reuseSteps,

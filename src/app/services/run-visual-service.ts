@@ -7,6 +7,7 @@ import type {
 } from '../dto.js';
 import type { TokenUsage } from '../dto.js';
 import type { RunEventEmitter } from '../events/run-event-emitter.js';
+import { aggregateTokenUsageOptional } from './run-metrics.js';
 
 export class RunVisualService {
   constructor(
@@ -50,7 +51,7 @@ export class RunVisualService {
     }
 
     // Calculate total token usage
-    const totalTokenUsage = this.calculateTotalTokenUsage(run.steps);
+    const totalTokenUsage = aggregateTokenUsageOptional(run.steps);
 
     // Get current sequence from event emitter for accurate lastEventId
     const currentSequence = this.eventEmitter?.getCurrentSequence(runId) ?? 0;
@@ -193,29 +194,6 @@ export class RunVisualService {
       cached: 'cached',
     };
     return statusMap[status] ?? 'pending';
-  }
-
-  /**
-   * Calculate total token usage across all steps
-   */
-  private calculateTotalTokenUsage(
-    steps: Record<string, { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens: number } }>,
-  ): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
-    let promptTokens = 0;
-    let completionTokens = 0;
-    let totalTokens = 0;
-
-    for (const step of Object.values(steps)) {
-      if (step.tokenUsage) {
-        promptTokens += step.tokenUsage.promptTokens ?? 0;
-        completionTokens += step.tokenUsage.completionTokens ?? 0;
-        totalTokens += step.tokenUsage.totalTokens ?? 0;
-      }
-    }
-
-    if (totalTokens === 0) return undefined;
-
-    return { promptTokens, completionTokens, totalTokens };
   }
 
   private buildInputPreview(input: string, inputData?: Record<string, unknown>): string | undefined {

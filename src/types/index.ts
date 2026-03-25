@@ -197,6 +197,52 @@ export interface RunState {
     reusedStepIds: string[];
     rerunStepIds: string[];
   };
+  /** Relationship to source run when sourceRunId exists. */
+  sourceRunRelationship?: SourceRunRelationship;
+  /** Workflow configuration snapshot captured at run start time.
+   * Contains the step configurations for version comparison.
+   * E1: Enables provenance tracking and version diffing. */
+  workflowSnapshot?: WorkflowSnapshot;
+}
+
+export type SourceRunRelationship = 'recover' | 'rerun' | 'rerun_with_edits';
+
+/**
+ * Snapshot of workflow configuration at a point in time.
+ * Used for version comparison and provenance tracking.
+ */
+export interface WorkflowSnapshot {
+  /** Hash of the workflow configuration for version identification */
+  versionHash: string;
+  /** Workflow ID (same as RunState.workflowId) */
+  workflowId: string;
+  /** Step snapshots for each node in the workflow */
+  steps: Record<string, StepSnapshot>;
+  /** When this snapshot was captured */
+  capturedAt: number;
+}
+
+/**
+ * Snapshot of a single step's configuration.
+ */
+export interface StepSnapshot {
+  /** Step ID */
+  id: string;
+  /** Agent configuration snapshot */
+  agent: {
+    id: string;
+    name: string;
+    model?: string;
+    runtimeType: RuntimeType;
+  };
+  /** System prompt at snapshot time */
+  systemPrompt: string;
+  /** Task description */
+  task: string;
+  /** Dependencies at snapshot time */
+  dependsOn: string[];
+  /** Gate type */
+  gate?: GateType;
 }
 
 export type EventType =

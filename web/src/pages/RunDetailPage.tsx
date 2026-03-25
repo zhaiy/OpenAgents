@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from '../i18n';
 import { useApi } from '../hooks/useApi';
-import { runApi, createSSEConnection, type RunEvent, type Step } from '../api';
+import { runApi, diagnosticsApi, createSSEConnection, type RunEvent, type Step, type DiagnosticsSummary } from '../api';
+import { Badge } from '../components/ui/Badge';
 
 type Tab = 'steps' | 'output' | 'logs' | 'eval';
 
@@ -18,6 +19,12 @@ export default function RunDetailPage() {
   const streamRef = useRef<HTMLPreElement>(null);
 
   const { data: run, isLoading, refetch } = useApi(() => runId ? runApi.get(runId) : Promise.resolve(null), [runId]);
+
+  // Fetch diagnostics for failed runs - E5 uses failureRecap and sourceRunInfo
+  const { data: diagnostics } = useApi(
+    () => runId && run?.status === 'failed' ? diagnosticsApi.getRunDiagnostics(runId) : Promise.resolve(null),
+    [runId, run?.status]
+  );
 
   useEffect(() => {
     if (!runId) return;
@@ -111,6 +118,8 @@ export default function RunDetailPage() {
     }
   };
 
+  const outputSteps = run.steps.filter((s) => s.output || streamBuffer[s.stepId]);
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       <header className="mb-8">
@@ -120,9 +129,35 @@ export default function RunDetailPage() {
             <span className={`badge ${getStatusBadgeClass(run.status)}`}>
               {t(`status.${run.status}`)}
             </span>
+            {/* Recovered from indicator - E5 */}
+            {run.recoveredFrom && (
+              <button
+                onClick={() => navigate(`/runs/${run.recoveredFrom.runId}`)}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/30 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-lg transition-colors"
+                title={`Recovered from ${run.recoveredFrom.runId}`}
+              >
+                ♻️ From: {run.recoveredFrom.runId.slice(0, 8)}...
+              </button>
+            )}
           </div>
           {/* Re-run Actions */}
           <div className="flex items-center gap-2">
+            {run.status === 'failed' && (
+              <>
+                <button
+                  onClick={() => navigate('/diagnostics')}
+                  className="px-3 py-1.5 text-sm bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 rounded-lg transition-colors"
+                >
+                  🔍 {t('runDetail.viewDiagnostics') || 'Diagnostics'}
+                </button>
+                <button
+                  onClick={() => navigate(`/runs/compare?runA=${run.runId}`)}
+                  className="px-3 py-1.5 text-sm bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/30 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-lg transition-colors"
+                >
+                  ⚖️ {t('comparison.compare')}
+                </button>
+              </>
+            )}
             <Link
               to={`/workflows/${run.workflowId}/run`}
               state={{ sourceRunId: run.runId }}
@@ -194,7 +229,7 @@ export default function RunDetailPage() {
 
               {activeTab === 'output' && (
                 <div className="space-y-4">
-                  {run.steps.filter((s) => s.output || streamBuffer[s.stepId]).map((step: Step) => (
+                  {outputSteps.map((step: Step) => (
                     <div key={step.stepId} className="border border-line rounded-lg p-4">
                       <h4 className="text-sm font-medium mb-2">{step.name}</h4>
                       <pre className="text-xs font-mono text-muted whitespace-pre-wrap break-words">
@@ -202,10 +237,9 @@ export default function RunDetailPage() {
                       </pre>
                     </div>
                   ))}
-                  {run.steps.filter((s) => s.output || streamBuffer[s.stepId]).length === 0 && (
-                    <div className="flex items-center justify-center py-8 text-muted">
-                      <div className="w-6 h-6 border-2 border-brand border-t-transparent rounded-full animate-spin mr-3" />
-                      {t('common.loading')}
+                  {outputSteps.length === 0 && (
+                    <div className="py-8 text-sm text-muted text-center">
+                      {t('comparison.noOutputDiff') || 'No output available for this run yet.'}
                     </div>
                   )}
                 </div>
@@ -251,6 +285,83 @@ export default function RunDetailPage() {
                  run.durationMs < 60000 ? `${(run.durationMs / 1000).toFixed(1)}s` :
                  `${(run.durationMs / 60000).toFixed(1)}m`}
               </p>
+            </div>
+          )}
+
+          {/* Failure Recap - visible for all failed runs */}
+          {run.status === 'failed' && diagnostics?.failureRecap && (
+            <div className="bg-panel rounded-xl border border-red-200 dark:border-red-800 p-6">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">🧭</span>
+                <h4 className="text-sm font-medium">{t('diagnostics.title') || 'Failure Recap'}</h4>
+                <Badge variant="error" className="text-xs">
+                  {diagnostics.failureRecap.primaryErrorType}
+                </Badge>
+              </div>
+              <p className="text-sm mb-2">{diagnostics.failureRecap.summary}</p>
+              <p className="text-xs text-muted mb-3">
+                {diagnostics.failureRecap.totalAffectedNodes} affected
+                {diagnostics.failureRecap.blocksExecution ? ' · blocks downstream execution' : ''}
+              </p>
+              <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <p className="text-xs text-red-700 dark:text-red-300">
+                  💡 {diagnostics.failureRecap.insight}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Recovery Context - E5: source linkage */}
+          {(run.recoveredFrom || diagnostics?.sourceRunInfo) && (
+            <div className="bg-panel rounded-xl border border-purple-200 dark:border-purple-800 p-6">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">♻️</span>
+                <h4 className="text-sm font-medium">{t('runDetail.recoveredFrom') || 'Recovery Context'}</h4>
+                {diagnostics?.sourceRunInfo && (
+                  <Badge variant="default" className="text-xs">
+                    {diagnostics.sourceRunInfo.relationship}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="space-y-2 text-sm">
+                {/* Source Run Link - prefer sourceRunInfo */}
+                {diagnostics?.sourceRunInfo ? (
+                  <button
+                    onClick={() => navigate(`/runs/${diagnostics.sourceRunInfo.sourceRunId}`)}
+                    className="block w-full text-left px-3 py-2 bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20 dark:hover:bg-purple-900/40 rounded-lg transition-colors"
+                  >
+                    <div className="text-xs text-muted mb-1">Source Run</div>
+                    <div className="font-mono text-xs truncate">{diagnostics.sourceRunInfo.sourceRunId}</div>
+                  </button>
+                ) : run.recoveredFrom ? (
+                  <button
+                    onClick={() => navigate(`/runs/${run.recoveredFrom.runId}`)}
+                    className="block w-full text-left px-3 py-2 bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20 dark:hover:bg-purple-900/40 rounded-lg transition-colors"
+                  >
+                    <div className="text-xs text-muted mb-1">Source Run</div>
+                    <div className="font-mono text-xs truncate">{run.recoveredFrom.runId}</div>
+                  </button>
+                ) : null}
+
+                {/* Step counts - prefer sourceRunInfo */}
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  {diagnostics?.sourceRunInfo ? (
+                    <>
+                      <span>Reused: {diagnostics.sourceRunInfo.reusedStepCount} steps</span>
+                      <span>·</span>
+                      <span>Re-run: {diagnostics.sourceRunInfo.rerunStepCount} steps</span>
+                    </>
+                  ) : run.recoveredFrom ? (
+                    <>
+                      <span>Reused: {run.recoveredFrom.reusedStepIds.length} steps</span>
+                      <span>·</span>
+                      <span>Re-run: {run.recoveredFrom.rerunStepIds.length} steps</span>
+                    </>
+                  ) : null}
+                </div>
+
+              </div>
             </div>
           )}
         </div>

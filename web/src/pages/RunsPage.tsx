@@ -13,7 +13,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from '../i18n';
 import { useApi } from '../hooks/useApi';
-import { runApi, workflowApi, ApiError } from '../api';
+import { runApi, workflowApi, diagnosticsApi, ApiError, type WorkflowQualitySummary } from '../api';
 
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed' | 'interrupted';
 type TimeFilter = 'all' | 'today' | 'week' | 'month';
@@ -24,6 +24,7 @@ export default function RunsPage() {
 
   const { data: runs, isLoading, refetch } = useApi(() => runApi.list());
   const { data: workflows } = useApi(() => workflowApi.list());
+  const { data: qualitySummaries } = useApi(() => diagnosticsApi.listWorkflowQualitySummaries(10));
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -226,6 +227,53 @@ export default function RunsPage() {
           </span>
         )}
       </div>
+
+      {/* Quality Trend Summary - E3 */}
+      {qualitySummaries && qualitySummaries.length > 0 && (
+        <div className="mb-6 p-4 bg-panel rounded-xl border border-line">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium">{t('runs.qualityTrends') || 'Quality Trends'}</h3>
+            <button
+              onClick={() => navigate('/diagnostics')}
+              className="text-xs text-brand hover:underline"
+            >
+              {t('diagnostics.viewAll') || 'View diagnostics'} →
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-4">
+            {qualitySummaries.slice(0, 4).map((qs: WorkflowQualitySummary) => (
+              <div
+                key={qs.workflowId}
+                className="flex items-center gap-3 min-w-[200px] cursor-pointer hover:bg-bg/50 rounded-lg p-2 -m-2 transition-colors"
+                onClick={() => navigate(`/workflows/${qs.workflowId}`)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate">{qs.workflowName || qs.workflowId}</span>
+                    {qs.evalSummary?.trend === 'declined' && (
+                      <span className="text-xs text-red-600 dark:text-red-400" title="Declining">↘</span>
+                    )}
+                    {qs.evalSummary?.trend === 'improving' && (
+                      <span className="text-xs text-green-600 dark:text-green-400" title="Improving">↗</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted">
+                    <span className={qs.successRate >= 80 ? 'text-green-600 dark:text-green-400' : qs.successRate >= 60 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}>
+                      {qs.successRate.toFixed(0)}%
+                    </span>
+                    <span>{qs.totalRuns} runs</span>
+                  </div>
+                </div>
+                {qs.failureCount > 0 && (
+                  <span className="text-xs px-1.5 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded">
+                    {qs.failureCount} failed
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12">

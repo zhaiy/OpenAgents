@@ -364,6 +364,23 @@ export default function RunExecutionPage() {
                 {t('execution.nodesCompleted')}
               </span>
             )}
+            {/* E5: Quick actions for failed runs */}
+            {visualState?.status === 'failed' && (
+              <div className="flex items-center gap-2 ml-2 pl-2 border-l border-line">
+                <button
+                  onClick={() => navigate('/diagnostics')}
+                  className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 rounded transition-colors"
+                >
+                  🔍 {t('runDetail.viewDiagnostics') || 'Diagnostics'}
+                </button>
+                <button
+                  onClick={() => navigate(`/runs/compare?runA=${runId}`)}
+                  className="px-2 py-1 text-xs bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/30 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded transition-colors"
+                >
+                  ⚖️ {t('comparison.compare')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>

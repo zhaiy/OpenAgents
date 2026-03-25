@@ -9,7 +9,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from '../i18n';
 import { useApi } from '../hooks/useApi';
 import { comparisonApi, runApi } from '../api';
-import type { InputDiff, NodeStatusDiff, OutputDiffItem, ComparisonSummary } from '../api';
+import type { InputDiff, NodeStatusDiff, OutputDiffItem, ComparisonSummary, WorkflowConfigDiff } from '../api';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Card } from '../components/ui/Card';
@@ -154,6 +154,14 @@ export default function RunComparisonPage() {
                   <div>{t('comparison.createdAt')}: {new Date(runA.startedAt).toLocaleString()}</div>
                   {runA.durationMs && <div>{t('comparison.duration')}: {formatDuration(runA.durationMs)}</div>}
                 </div>
+                {runA.recoveredFrom && (
+                  <button
+                    onClick={() => handleViewRun(runA.recoveredFrom!.runId)}
+                    className="mt-2 flex items-center gap-1 text-xs text-purple-600 dark:text-purple-400 hover:underline"
+                  >
+                    ♻️ From: {runA.recoveredFrom.runId.slice(0, 8)}...
+                  </button>
+                )}
                 {runA.status === 'failed' && (
                   <Button
                     variant="primary"
@@ -187,6 +195,14 @@ export default function RunComparisonPage() {
                   <div>{t('comparison.createdAt')}: {new Date(runB.startedAt).toLocaleString()}</div>
                   {runB.durationMs && <div>{t('comparison.duration')}: {formatDuration(runB.durationMs)}</div>}
                 </div>
+                {runB.recoveredFrom && (
+                  <button
+                    onClick={() => handleViewRun(runB.recoveredFrom!.runId)}
+                    className="mt-2 flex items-center gap-1 text-xs text-purple-600 dark:text-purple-400 hover:underline"
+                  >
+                    ♻️ From: {runB.recoveredFrom.runId.slice(0, 8)}...
+                  </button>
+                )}
                 {runB.status === 'failed' && (
                   <Button
                     variant="primary"
@@ -243,6 +259,11 @@ export default function RunComparisonPage() {
         <div className="space-y-6">
           {/* Summary Card - Key for decision making */}
           <SummaryCard summary={comparison.summary} t={t} />
+
+          {/* E2: Structured Workflow Config Diff */}
+          {comparison.workflowConfigDiff && (
+            <WorkflowConfigDiffCard diff={comparison.workflowConfigDiff} />
+          )}
 
           {/* Workflow Info */}
           {comparison.workflowInfo && !comparison.workflowInfo.isSameWorkflow && (
@@ -575,7 +596,72 @@ function SummaryCard({ summary, t }: { summary: ComparisonSummary; t: (key: stri
               </ul>
             </div>
           )}
+
+          {summary.versionDiffSummary && (
+            <div>
+              <h3 className="text-sm font-medium mb-2 flex items-center gap-2 text-purple-600 dark:text-purple-400">
+                <span>🧬</span> {t('comparison.versionDiff') || 'Version Diff'}
+              </h3>
+              <div className="text-sm space-y-1">
+                <p>{summary.versionDiffSummary.changeDescription}</p>
+                <p className="text-xs text-muted">{summary.versionDiffSummary.impactAssessment}</p>
+              </div>
+            </div>
+          )}
         </div>
+      </div>
+    </Card>
+  );
+}
+
+function WorkflowConfigDiffCard({ diff }: { diff: WorkflowConfigDiff }) {
+  const structure = diff.structureDiff;
+  return (
+    <Card>
+      <h2 className="text-lg font-medium mb-4 flex items-center gap-2">
+        <span>🧱</span> Workflow Config Diff
+      </h2>
+      <div className="text-sm space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <div className="text-xs text-muted">Total Changes</div>
+            <div className="text-lg font-semibold">{diff.summary.totalChanges}</div>
+          </div>
+          <div className="p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
+            <div className="text-xs text-muted">Execution Path</div>
+            <div className="text-lg font-semibold text-orange-600 dark:text-orange-400">
+              {diff.summary.executionPathChanges}
+            </div>
+          </div>
+          <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+            <div className="text-xs text-muted">Output Risk</div>
+            <div className="text-lg font-semibold text-blue-600 dark:text-blue-400">
+              {diff.summary.outputRiskChanges}
+            </div>
+          </div>
+        </div>
+
+        {(structure?.addedNodes?.length || structure?.removedNodes?.length) ? (
+          <div className="p-3 border border-line rounded-lg text-xs space-y-1">
+            {structure?.addedNodes?.length ? <p>+ Added: {structure.addedNodes.join(', ')}</p> : null}
+            {structure?.removedNodes?.length ? <p>- Removed: {structure.removedNodes.join(', ')}</p> : null}
+          </div>
+        ) : null}
+
+        {diff.nodeDiffs.length > 0 && (
+          <div className="space-y-2">
+            {diff.nodeDiffs.slice(0, 8).map((node) => (
+              <div key={node.nodeId} className="p-3 border border-line rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs">{node.nodeName || node.nodeId}</span>
+                  <Badge variant={node.impactType === 'execution_path' ? 'warning' : node.impactType === 'both' ? 'error' : 'default'}>
+                    {node.impactType}
+                  </Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   );

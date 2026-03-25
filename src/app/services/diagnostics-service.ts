@@ -212,6 +212,16 @@ export class DiagnosticsService {
         ? this.computeRecoveryScope(run, workflowConfig)
         : undefined;
 
+      // E4: Compute failure recap summary
+      const failureRecap = run.status === 'failed'
+        ? this.computeFailureRecap(run.runId, failedNodes, downstreamImpact, errorSummary)
+        : undefined;
+
+      // E4: Compute source run info if this is a recovery/rerun
+      const sourceRunInfo = run.sourceRunId
+        ? this.computeSourceRunInfo(run)
+        : undefined;
+
       return {
         runId,
         workflowId: run.workflowId,
@@ -226,10 +236,107 @@ export class DiagnosticsService {
         upstreamStates,
         recommendedActions,
         recoveryScope,
+        failureRecap,
+        sourceRunInfo,
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * E4: Compute a structured failure recap summary.
+   */
+  private computeFailureRecap(
+    runId: string,
+    failedNodes: FailedNodeDetail[],
+    downstreamImpact: DownstreamImpactNode[],
+    errorSummary: ErrorSummary[],
+  ): DiagnosticsSummaryDto['failureRecap'] | undefined {
+    if (failedNodes.length === 0) {
+      return undefined;
+    }
+
+    // Primary error type (most common)
+    const errorTypeCounts = new Map<string, number>();
+    for (const error of errorSummary) {
+      errorTypeCounts.set(error.errorType, (errorTypeCounts.get(error.errorType) ?? 0) + 1);
+    }
+    let primaryErrorType = 'Unknown';
+    let maxCount = 0;
+    for (const [type, count] of errorTypeCounts) {
+      if (count > maxCount) {
+        primaryErrorType = type;
+        maxCount = count;
+      }
+    }
+
+    // Total affected nodes
+    const affectedNodeIds = new Set([
+      ...failedNodes.map((n) => n.nodeId),
+      ...downstreamImpact.map((n) => n.nodeId),
+    ]);
+    const totalAffectedNodes = affectedNodeIds.size;
+
+    // Does it block execution?
+    const blocksExecution = downstreamImpact.some(
+      (n) => n.impactType === 'blocked' || n.impactType === 'will_fail',
+    );
+
+    // Generate summary
+    const failedStepNames = failedNodes.map((n) => n.nodeName || n.nodeId);
+    let summary: string;
+    if (failedNodes.length === 1) {
+      summary = `Run failed at step "${failedStepNames[0]}"`;
+    } else {
+      summary = `Run failed with ${failedNodes.length} failed steps`;
+    }
+
+    // Generate insight
+    let insight: string;
+    if (blocksExecution) {
+      insight = 'Failure blocks downstream execution - consider smart recovery to reuse completed steps';
+    } else if (primaryErrorType === 'AuthenticationError' || primaryErrorType === 'RateLimitError') {
+      insight = 'This appears to be a transient error - retry may succeed';
+    } else if (primaryErrorType === 'TimeoutError') {
+      insight = 'Operation timed out - check network or increase timeout if appropriate';
+    } else {
+      insight = 'Consider reviewing the workflow configuration or input data';
+    }
+
+    return {
+      summary,
+      primaryErrorType,
+      totalAffectedNodes,
+      blocksExecution,
+      insight,
+    };
+  }
+
+  /**
+   * E4: Compute source run info if this run was created via recovery/rerun.
+   */
+  private computeSourceRunInfo(
+    run: {
+      sourceRunId?: string;
+      sourceRunRelationship?: 'recover' | 'rerun' | 'rerun_with_edits';
+      recoveryInfo?: { reusedStepIds: string[]; rerunStepIds: string[] };
+    },
+  ): DiagnosticsSummaryDto['sourceRunInfo'] | undefined {
+    if (!run.sourceRunId) {
+      return undefined;
+    }
+
+    // Determine relationship type based on recovery info
+    const relationship = run.sourceRunRelationship
+      ?? (run.recoveryInfo && run.recoveryInfo.reusedStepIds.length > 0 ? 'recover' : 'rerun');
+
+    return {
+      sourceRunId: run.sourceRunId,
+      relationship,
+      reusedStepCount: run.recoveryInfo?.reusedStepIds.length ?? 0,
+      rerunStepCount: run.recoveryInfo?.rerunStepIds.length ?? 0,
+    };
   }
 
   /**

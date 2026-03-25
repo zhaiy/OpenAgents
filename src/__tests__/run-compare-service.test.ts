@@ -92,7 +92,7 @@ describe('RunCompareService (N7)', () => {
             status: 'failed',
             startedAt: 2500,
             completedAt: 3500,
-            errorMessage: 'Step failed due to timeout',
+            error: 'Step failed due to timeout',
           },
         },
       });
@@ -265,7 +265,7 @@ describe('RunCompareService (N7)', () => {
       const runA = createMockRunState({
         status: 'failed',
         steps: {
-          'step-1': { status: 'failed', errorMessage: 'Error' },
+          'step-1': { status: 'failed', error: 'Error' },
         },
       });
 
@@ -355,6 +355,57 @@ describe('RunCompareService (N7)', () => {
 
       expect(result.summary.similarityScore).toBe(100);
       expect(result.summary.keyDifferences.length).toBe(0);
+    });
+
+    it('should include workflowConfigDiff when workflow snapshots differ', () => {
+      const runA = createMockRunState({
+        workflowSnapshot: {
+          workflowId: 'wf-1',
+          versionHash: 'aaa111',
+          capturedAt: 1000,
+          steps: {
+            'step-1': {
+              id: 'step-1',
+              agent: { id: 'agent-a', name: 'Agent A', model: 'gpt-4', runtimeType: 'llm-direct' },
+              systemPrompt: 'Prompt A',
+              task: 'Task A',
+              dependsOn: [],
+              gate: 'auto',
+            },
+          },
+        },
+      });
+
+      const runB = createMockRunState({
+        workflowSnapshot: {
+          workflowId: 'wf-1',
+          versionHash: 'bbb222',
+          capturedAt: 1001,
+          steps: {
+            'step-1': {
+              id: 'step-1',
+              agent: { id: 'agent-a', name: 'Agent A', model: 'gpt-4.1', runtimeType: 'llm-direct' },
+              systemPrompt: 'Prompt B',
+              task: 'Task A',
+              dependsOn: [],
+              gate: 'auto',
+            },
+          },
+        },
+      });
+
+      mockStateManager.findRunById.mockImplementation((runId: string) => {
+        if (runId === 'run-a') return runA;
+        if (runId === 'run-b') return runB;
+        throw new Error(`Run not found: ${runId}`);
+      });
+
+      const result = service.compare('run-a', 'run-b');
+
+      expect(result.workflowConfigDiff).toBeDefined();
+      expect(result.workflowConfigDiff?.isSameConfig).toBe(false);
+      expect(result.summary.versionDiffSummary?.hasConfigDiff).toBe(true);
+      expect(result.summary.versionDiffSummary?.configChanges).toBeGreaterThan(0);
     });
   });
 

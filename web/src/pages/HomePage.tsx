@@ -10,7 +10,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from '../i18n';
 import { useApi } from '../hooks/useApi';
-import { runApi, diagnosticsApi } from '../api';
+import { runApi, diagnosticsApi, type WorkflowQualitySummary } from '../api';
 import { Badge } from '../components/ui/Badge';
 
 export default function HomePage() {
@@ -20,9 +20,10 @@ export default function HomePage() {
   const { data: runs, isLoading: runsLoading } = useApi(() => runApi.list());
   const { data: failedRuns, isLoading: failedLoading } = useApi(() => diagnosticsApi.getFailedRuns());
   const { data: waitingGates, isLoading: gatesLoading } = useApi(() => diagnosticsApi.getWaitingGates());
+  const { data: qualitySummaries, isLoading: qualityLoading } = useApi(() => diagnosticsApi.listWorkflowQualitySummaries(10));
 
   const needsAttention = (failedRuns?.length || 0) + (waitingGates?.length || 0);
-  const isLoading = runsLoading || failedLoading || gatesLoading;
+  const isLoading = runsLoading || failedLoading || gatesLoading || qualityLoading;
 
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleString();
@@ -41,6 +42,34 @@ export default function HomePage() {
       default:
         return 'bg-line text-muted';
     }
+  };
+
+  const getTrendIcon = (trend?: 'improving' | 'declined' | 'stable' | 'insufficient_data') => {
+    switch (trend) {
+      case 'improving':
+        return { icon: '↗', color: 'text-green-600 dark:text-green-400', label: 'Improving' };
+      case 'declined':
+        return { icon: '↘', color: 'text-red-600 dark:text-red-400', label: 'Declining' };
+      case 'stable':
+        return { icon: '→', color: 'text-blue-600 dark:text-blue-400', label: 'Stable' };
+      default:
+        return { icon: '?', color: 'text-muted', label: 'Insufficient data' };
+    }
+  };
+
+  const getSuccessRateColor = (rate: number) => {
+    if (rate >= 80) return 'text-green-600 dark:text-green-400';
+    if (rate >= 60) return 'text-yellow-600 dark:text-yellow-400';
+    return 'text-red-600 dark:text-red-400';
+  };
+
+  const formatDuration = (ms?: number) => {
+    if (!ms) return '-';
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s`;
   };
 
   return (
@@ -164,6 +193,89 @@ export default function HomePage() {
           </button>
         </div>
       </section>
+
+      {/* Quality Trends - E3 */}
+      {qualitySummaries && qualitySummaries.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-medium text-muted uppercase tracking-wide">
+              {t('home.qualityTrends') || 'Quality Trends'}
+            </h3>
+            <button
+              onClick={() => navigate('/workflows')}
+              className="text-sm text-brand hover:underline"
+            >
+              {t('home.viewAllWorkflows') || 'View workflows'} →
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {qualitySummaries.slice(0, 6).map((summary: WorkflowQualitySummary) => {
+              const trend = getTrendIcon(summary.evalSummary?.trend);
+              return (
+                <div
+                  key={summary.workflowId}
+                  className="bg-panel rounded-xl border border-line p-4 hover:border-brand/30 transition-colors cursor-pointer"
+                  onClick={() => navigate(`/workflows/${summary.workflowId}`)}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <h4 className="font-medium text-sm truncate flex-1 mr-2">
+                      {summary.workflowName || summary.workflowId}
+                    </h4>
+                    <span className={`text-lg ${trend.color}`} title={trend.label}>
+                      {trend.icon}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted">Success Rate</span>
+                      <span className={`text-sm font-medium ${getSuccessRateColor(summary.successRate)}`}>
+                        {summary.successRate.toFixed(0)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                      <div
+                        className={`h-1.5 rounded-full ${
+                          summary.successRate >= 80 ? 'bg-green-500' :
+                          summary.successRate >= 60 ? 'bg-yellow-500' : 'bg-red-500'
+                        }`}
+                        style={{ width: `${summary.successRate}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-muted">
+                      <span>{summary.successCount}/{summary.totalRuns} runs</span>
+                      {summary.avgDurationMs && (
+                        <span>Avg: {formatDuration(summary.avgDurationMs)}</span>
+                      )}
+                    </div>
+                    {summary.failureCount > 0 && (
+                      <div className="flex items-center gap-2 pt-1 border-t border-line">
+                        <Badge variant="error" className="text-xs">
+                          {summary.failureCount} failed
+                        </Badge>
+                        {summary.failureTypes[0] && (
+                          <span className="text-xs text-muted truncate">
+                            {summary.failureTypes[0].errorType}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {qualitySummaries.length > 6 && (
+            <div className="mt-4 text-center">
+              <button
+                onClick={() => navigate('/workflows')}
+                className="text-sm text-brand hover:underline"
+              >
+                {t('home.moreWorkflows') || `+${qualitySummaries.length - 6} more workflows`}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Recent Runs */}
       <section className="mb-8">

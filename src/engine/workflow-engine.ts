@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { ConfigLoader } from '../config/loader.js';
@@ -6,7 +7,18 @@ import { GateRejectError, RuntimeError, WorkflowInterruptError } from '../errors
 import { EventLogger } from '../output/logger.js';
 import { OutputWriter } from '../output/writer.js';
 import { sendWebhookNotification } from '../output/notifier.js';
-import type { AgentConfig, AgentRuntime, ProjectConfig, RunState, RuntimeType, StepConfig, WorkflowConfig } from '../types/index.js';
+import type {
+  AgentConfig,
+  AgentRuntime,
+  ProjectConfig,
+  RunState,
+  RuntimeType,
+  SourceRunRelationship,
+  StepConfig,
+  StepSnapshot,
+  WorkflowConfig,
+  WorkflowSnapshot,
+} from '../types/index.js';
 import { processContext } from './context-processor.js';
 import { GateManager } from './gate.js';
 import { DAGParser } from './dag.js';
@@ -32,6 +44,8 @@ interface RunOptions {
     reusedStepIds: string[];
     rerunStepIds: string[];
   };
+  /** Explicit relationship type to source run for provenance. */
+  sourceRunRelationship?: SourceRunRelationship;
 }
 
 interface RenderContext {
@@ -82,6 +96,7 @@ export class WorkflowEngine {
 
     const plan = this.dagParser.parse(workflow.steps);
     const runId = options?.runId ?? this.deps.stateManager.generateRunId();
+    const workflowSnapshot = this.buildWorkflowSnapshot(workflow, agents);
     const state = this.deps.stateManager.initRun(
       runId,
       workflow.workflow.id,
@@ -91,6 +106,8 @@ export class WorkflowEngine {
       {
         sourceRunId: options?.sourceRunId,
         recoveryInfo: options?.recoveryInfo,
+        sourceRunRelationship: options?.sourceRunRelationship,
+        workflowSnapshot,
       },
     );
     if (options?.sourceRunId && options.recoveryInfo?.reusedStepIds.length) {
@@ -698,6 +715,41 @@ export class WorkflowEngine {
         durationMs: undefined,
       });
     }
+  }
+
+  private buildWorkflowSnapshot(
+    workflow: WorkflowConfig,
+    agents: Map<string, AgentConfig>,
+  ): WorkflowSnapshot {
+    const stepSnapshots: Record<string, StepSnapshot> = {};
+    for (const step of workflow.steps) {
+      const agent = agents.get(step.agent);
+      stepSnapshots[step.id] = {
+        id: step.id,
+        agent: {
+          id: step.agent,
+          name: agent?.agent.name ?? step.agent,
+          model: agent?.runtime.model,
+          runtimeType: agent?.runtime.type ?? 'llm-direct',
+        },
+        systemPrompt: agent?.prompt.system ?? '',
+        task: step.task,
+        dependsOn: step.depends_on ?? [],
+        gate: step.gate ?? 'auto',
+      };
+    }
+
+    const versionHash = createHash('sha256').update(JSON.stringify({
+      workflowId: workflow.workflow.id,
+      steps: Object.values(stepSnapshots).sort((a, b) => a.id.localeCompare(b.id)),
+    })).digest('hex').slice(0, 16);
+
+    return {
+      workflowId: workflow.workflow.id,
+      versionHash,
+      steps: stepSnapshots,
+      capturedAt: Date.now(),
+    };
   }
 
   private async applyPostProcessors(

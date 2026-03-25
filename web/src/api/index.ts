@@ -437,6 +437,44 @@ export interface ComparisonSummary {
   keyDifferences: string[];
   recommendations: string[];
   warnings: string[];
+  versionDiffSummary?: {
+    hasConfigDiff: boolean;
+    structuralChanges: number;
+    configChanges: number;
+    changeDescription: string;
+    impactAssessment: string;
+  };
+}
+
+export type ChangeImpactType = 'execution_path' | 'output_risk' | 'both';
+
+export interface NodeConfigDiff {
+  nodeId: string;
+  nodeName?: string;
+  impactType: ChangeImpactType;
+  agentChanged?: { runA: string; runB: string };
+  modelChanged?: { runA?: string; runB?: string };
+  promptChanged?: { runA: string; runB: string; isSignificant: boolean };
+  taskChanged?: { runA: string; runB: string };
+  dependenciesChanged?: { runA: string[]; runB: string[]; added: string[]; removed: string[] };
+  gateChanged?: { runA?: 'auto' | 'approve'; runB?: 'auto' | 'approve' };
+}
+
+export interface WorkflowConfigDiff {
+  isSameConfig: boolean;
+  versionHashA?: string;
+  versionHashB?: string;
+  structureDiff?: {
+    addedNodes: string[];
+    removedNodes: string[];
+    reorderedNodes?: string[];
+  };
+  nodeDiffs: NodeConfigDiff[];
+  summary: {
+    totalChanges: number;
+    executionPathChanges: number;
+    outputRiskChanges: number;
+  };
 }
 
 export interface RunComparison {
@@ -447,6 +485,7 @@ export interface RunComparison {
     name: string;
     isSameWorkflow: boolean;
   };
+  workflowConfigDiff?: WorkflowConfigDiff;
   inputDiff?: InputDiff[];
   inputDiffSummary?: {
     added: number;
@@ -761,6 +800,21 @@ export interface DiagnosticsSummary {
     invalidatedCount: number;
     riskLevel: 'low' | 'medium' | 'high';
     summary: string;
+  };
+  /** E4: Structured failure recap summary */
+  failureRecap?: {
+    summary: string;
+    primaryErrorType: string;
+    totalAffectedNodes: number;
+    blocksExecution: boolean;
+    insight: string;
+  };
+  /** E4: Source run info if this was a recovery/rerun */
+  sourceRunInfo?: {
+    sourceRunId: string;
+    relationship: 'recover' | 'rerun' | 'rerun_with_edits';
+    reusedStepCount: number;
+    rerunStepCount: number;
   };
 }
 

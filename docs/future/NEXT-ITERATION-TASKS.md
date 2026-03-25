@@ -1,8 +1,8 @@
 # OpenAgents 下一期迭代任务拆解
 
-> 创建日期：2026-03-24
+> 创建日期：2026-03-25
 > 对应文档：`docs/future/NEXT-ITERATION-PLAN.md`
-> 适用阶段：下一期“恢复与观测”迭代
+> 适用阶段：下一期“复盘与演进（聚焦版）”迭代
 
 ---
 
@@ -17,9 +17,9 @@
 
 本次拆分强调以下原则：
 
-1. 恢复主链路优先
-2. 统计口径优先
-3. 跨层闭环优先
+1. 版本上下文优先
+2. 差异解释优先
+3. 复盘闭环优先
 4. 测试同步优先
 
 ---
@@ -28,8 +28,8 @@
 
 | 优先级 | 含义 |
 |------|------|
-| `P0` | 必须完成，否则本期“恢复与观测”目标不成立 |
-| `P1` | 强烈建议完成，能显著提升现有能力的真实价值 |
+| `P0` | 必须完成，否则本期“复盘与演进”目标不成立 |
+| `P1` | 强烈建议完成，能显著提升复盘和调优价值 |
 | `P2` | 可伴随推进，用于控制技术债与后续成本 |
 
 ---
@@ -38,7 +38,7 @@
 
 | 等级 | 含义 |
 |------|------|
-| `S` | 涉及恢复语义、跨层状态、聚合口径、较高联调风险 |
+| `S` | 涉及版本语义、跨层关联、指标口径、较高联调风险 |
 | `A` | 中高复杂度业务闭环，涉及多个模块 |
 | `B` | 标准页面/API/测试增强任务 |
 | `C` | 收尾、整理、文档、低风险增强 |
@@ -49,21 +49,20 @@
 
 建议按以下顺序推进：
 
-1. `M1` 节点级恢复语义与 DTO/API 定义
-2. `M2` 恢复执行链路落地
-3. `M3` 恢复预览与风险提示
-4. `M4` 恢复链路测试补强
-5. `M5` 成本观测能力
-6. `M6` 质量观测能力
-7. `M7` 统计与聚合层整理
+1. `E1` 运行版本快照与关联基线
+2. `E2` 版本差异视图
+3. `E4` 失败 run 复盘摘要
+4. `E6` 复盘与趋势测试补强
+5. `E3` 历史趋势分析
+6. `E5` 复盘链路联动收口
+7. `E7` 快照与聚合层适度整理
 
 关键路径如下：
 
 ```text
-M1 -> M2 -> M3 -> M4
-  \-> M5
-  \-> M6
-M7 可伴随进行，但不应阻塞恢复主链路
+E1 -> E2 -> E4 -> E5 -> E6
+  \-> E3 -----------^
+E7 可伴随进行，但不应阻塞主链路
 ```
 
 ---
@@ -72,264 +71,272 @@ M7 可伴随进行，但不应阻塞恢复主链路
 
 | 编号 | 名称 | 优先级 | 难度 | 依赖 |
 |------|------|------|------|------|
-| M1 | 节点级恢复语义与契约定义 | P0 | S | 无 |
-| M2 | 恢复执行链路落地 | P0 | S | M1 |
-| M3 | 恢复预览与风险提示 | P0 | A | M1, M2 |
-| M4 | 恢复链路测试补强 | P0 | A | M1, M2, M3 |
-| M5 | 成本观测能力 | P1 | A | M1 |
-| M6 | 质量观测能力 | P1 | A | M1 |
-| M7 | 统计与聚合层适度整理 | P2 | B | M1, M5, M6 |
+| E1 | 运行版本快照与关联基线 | P0 | S | 无 |
+| E2 | 版本差异视图 | P0 | A | E1 |
+| E3 | 历史趋势分析 | P1 | A | E1 |
+| E4 | 失败 run 复盘摘要 | P0 | A | E1, E2 |
+| E5 | 复盘链路联动收口 | P1 | B | E2, E3, E4 |
+| E6 | 复盘与趋势测试补强 | P0 | A | E1, E2, E4, E5 |
+| E7 | 快照与聚合层适度整理 | P2 | B | E1, E3, E4 |
 
 ---
 
 ## 六、详细任务拆解
 
-## M1. 节点级恢复语义与契约定义
+## E1. 运行版本快照与关联基线
 
 ### 目标
 
-先定义清楚恢复能力的边界、请求结构、结果结构和与 rerun 的关系，避免后续实现阶段出现语义漂移。
+先定义清楚 run 的版本来源、快照引用和与 recover / rerun 的承接关系，避免后续差异分析和复盘摘要建立在不稳定的历史样本上。
 
 ### 重点范围
 
 - `src/app/dto.ts`
+- `src/app/services/run-service.ts`
+- `src/app/services/run-registry.ts`
+- `src/app/services/workflow-service.ts`
 - `src/web/routes.ts`
 - `web/src/api/index.ts`
-- `src/app/services/run-reuse-service.ts`
-- `src/app/services/diagnostics-service.ts`
 
 ### 子任务
 
-1. 定义 recovery request / preview / response DTO
-2. 明确 recover、rerun、rerun-with-edits 的边界
-3. 定义“复用节点 / 重跑节点 / 失效节点”的统一表达
-4. 定义 source run / recovery source / recovered run 的关联字段
+1. 定义 run version snapshot / provenance DTO
+2. 明确 source run、recovered run、rerun run 的版本关联字段
+3. 固化 workflow / agent / prompt / config 的最小可追踪上下文
+4. 收口 run detail、compare、diagnostics 共享的版本字段
 5. 补关键契约测试
 
 ### 建议产出
 
-- Recovery DTO 契约表
-- 恢复语义说明
+- 运行版本快照契约表
+- 版本关联说明
 - 契约测试
 
 ### 验收标准
 
-- 恢复行为边界清楚
-- 前后端不再各自推断恢复含义
-- 路由契约有测试保护
+- 用户可以知道一个 run 来自哪版 workflow 和关键配置
+- 前后端不再各自推断版本来源
+- rerun / recover 的版本承接关系清楚
 
 ---
 
-## M2. 恢复执行链路落地
+## E2. 版本差异视图
 
 ### 目标
 
-把节点级恢复从定义推进到真实可执行路径。
+把 compare 从“展示结果差异”推进到“解释版本差异和可能影响”，让用户更容易判断变化来源。
 
 ### 重点范围
 
-- `src/app/services/run-reuse-service.ts`
-- `src/app/services/run-service.ts`
-- `src/app/context.ts`
+- `src/app/dto.ts`
+- `src/app/services/run-compare-service.ts`
+- `src/app/services/diagnostics-service.ts`
 - `src/web/routes.ts`
-- `web/src/pages/WorkflowRunPage.tsx`
+- `web/src/pages/RunComparisonPage.tsx`
+- `web/src/pages/RunDetailPage.tsx`
+
+### 子任务
+
+1. 聚合 workflow 结构、节点配置、模型、提示词等差异
+2. 区分执行路径变化与输出风险变化
+3. 让 compare 支持显示差异摘要与影响提示
+4. 为失败 run 或回归 run 挂接版本变化背景
+5. 补差异契约与页面测试
+
+### 建议产出
+
+- 版本差异 DTO
+- 差异摘要区
+- 差异聚合测试
+
+### 验收标准
+
+- 用户能回答“这两次 run 到底变了什么”
+- compare 可说明变化可能影响的范围
+- 差异结果在页面和 API 中口径一致
+
+---
+
+## E3. 历史趋势分析
+
+### 目标
+
+建立 workflow 级趋势摘要，让恢复、成本、质量等指标从单次观察升级为历史比较。
+
+### 重点范围
+
+- `src/app/dto.ts`
+- `src/app/services/run-metrics.ts`
+- `src/app/services/run-service.ts`
+- `src/app/services/diagnostics-service.ts`
+- `src/web/routes.ts`
+- `web/src/pages/HomePage.tsx`
+- `web/src/pages/RunsPage.tsx`
+- `web/src/pages/WorkflowOverviewPage.tsx`
+
+### 子任务
+
+1. 定义最近 N 次运行的趋势聚合口径
+2. 聚合成功率、失败率、duration、token、gate、recovery 等核心指标
+3. 增加基础回归或异常波动提示
+4. 在首页、runs 或 workflow 概览补趋势摘要入口
+5. 补趋势统计测试
+
+### 建议产出
+
+- workflow trend DTO
+- 趋势摘要卡片或列表增强
+- 趋势口径测试
+
+### 验收标准
+
+- 用户能看出某个 workflow 最近是变好还是变差
+- 关键指标在不同页面不各算一套
+- 回归信号至少具备基础可见性
+
+---
+
+## E4. 失败 run 复盘摘要
+
+### 目标
+
+围绕失败 run 提供结构化复盘摘要，让 diagnostics 和 run detail 不再只是零散信息堆叠。
+
+### 重点范围
+
+- `src/app/dto.ts`
+- `src/app/services/diagnostics-service.ts`
+- `src/app/services/run-compare-service.ts`
+- `src/app/services/recovery-planner.ts`
+- `src/web/routes.ts`
+- `web/src/pages/DiagnosticsPage.tsx`
+- `web/src/pages/RunDetailPage.tsx`
 - `web/src/pages/RunExecutionPage.tsx`
 
 ### 子任务
 
-1. 支持从失败节点或指定节点发起恢复
-2. 根据依赖关系推导重跑范围
-3. 支持恢复时保留/复用已有上下文信息
-4. 在 run 详情和执行页中标记 recovered run
-5. 收口恢复后导航与状态衔接
+1. 汇总失败节点、失败类型和下游影响范围
+2. 结合版本差异、恢复关系和关键指标生成复盘摘要
+3. 提供 compare、recover、rerun-with-edits 等后续动作入口
+4. 统一 diagnostics 与 run detail 的复盘表达
+5. 补复盘摘要测试
 
 ### 建议产出
 
-- 恢复执行链路实现
-- 恢复路径页面入口
-- 主链路集成测试
+- 失败复盘 DTO
+- 复盘摘要区
+- 复盘聚合测试
 
 ### 验收标准
 
-- 用户可以从失败 run 发起节点级恢复
-- 恢复后的 run 可被追踪
-- 恢复主链路异常时有清晰反馈
+- 用户能更快理解失败发生在哪、影响到哪里
+- 复盘摘要不是无来源文本，而是基于已有结构化数据
+- diagnostics 可直接引导下一步动作
 
 ---
 
-## M3. 恢复预览与风险提示
+## E5. 复盘链路联动收口
 
 ### 目标
 
-让恢复动作在执行前可被解释和确认。
+把 diagnostics、compare、timeline、recovery 这些已有能力串成一条更完整的复盘链路。
 
 ### 重点范围
 
-- `src/app/services/run-reuse-service.ts`
-- `src/app/services/diagnostics-service.ts`
 - `src/web/routes.ts`
-- `web/src/pages/WorkflowRunPage.tsx`
+- `web/src/api/index.ts`
 - `web/src/pages/DiagnosticsPage.tsx`
 - `web/src/pages/RunComparisonPage.tsx`
+- `web/src/pages/RunDetailPage.tsx`
+- `web/src/pages/RunExecutionPage.tsx`
 
 ### 子任务
 
-1. 展示本次恢复将复用的节点
-2. 展示本次恢复将重跑的节点
-3. 展示下游输出失效或重新生成风险
-4. 对 gate / eval / failed downstream 提供额外提示
-5. 统一 rerun / rerun-with-edits / recover 的 preview 体验
+1. 统一失败 run 的推荐入口和导航表达
+2. 让版本差异、趋势、复盘摘要可互相跳转
+3. 强化 recovered run 与 source run 的复盘联动
+4. 收口关键文案、空态、异常态
+5. 补页面级 smoke / E2E 测试
 
 ### 建议产出
 
-- Recovery Preview API
-- 页面预览卡片或确认面板
-- 风险提示文案和测试
+- 复盘导航闭环
+- 页面联动收口
+- smoke / E2E 用例
 
 ### 验收标准
 
-- 用户恢复前能看见影响范围
-- preview 与真实恢复结果一致
-- diagnostics 可直接引导恢复动作
+- 用户不需要自己拼复盘路径
+- run detail、diagnostics、compare 的角色边界更清晰
+- 联动入口在异常态下也有合理反馈
 
 ---
 
-## M4. 恢复链路测试补强
+## E6. 复盘与趋势测试补强
 
 ### 目标
 
-建立恢复主链路的自动化保护，避免后续迭代把恢复能力做成脆弱补丁。
+建立版本、差异、趋势、复盘主链路的自动化保护，避免这期能力变成表面可看但后续容易回退的薄层功能。
 
 ### 重点范围
 
 - `src/__tests__/`
+- `src/app/services/*.test.ts`
 - `web/tests/`
 
 ### 子任务
 
-1. recovery 路由测试
-2. recovery preview 契约测试
-3. failed run -> diagnostics -> recover 集成测试
-4. recover 后 run 标识与导航测试
-5. 最小 smoke / E2E 恢复链路回归
+1. 版本快照与 run 关联测试
+2. 差异 DTO / route / service 测试
+3. 趋势口径测试
+4. 失败复盘摘要测试
+5. 关键跨页面复盘链路 smoke / E2E 回归
 
 ### 建议产出
 
-- 恢复链路测试矩阵
-- 一组恢复集成测试
-- 一组页面级 smoke 用例
+- 复盘测试矩阵
+- 一组差异与趋势统计测试
+- 一组页面级复盘回归用例
 
 ### 验收标准
 
-- 至少一条恢复主链路有自动化覆盖
-- 恢复范围和 preview 一致性可被及时发现回归
+- 至少一条完整复盘主链路有自动化覆盖
+- 版本差异和趋势口径的回归可被及时发现
+- 页面联动变化不会静默破坏复盘体验
 
 ---
 
-## M5. 成本观测能力
+## E7. 快照与聚合层适度整理
 
 ### 目标
 
-建立 step / run / workflow 三层基础成本观测能力。
+适度整理版本快照、趋势统计、复盘摘要相关聚合逻辑，为后续更深的版本演进与趋势分析做结构预留。
 
 ### 重点范围
 
-- `src/app/dto.ts`
-- `src/app/services/run-service.ts`
+- `src/app/services/run-metrics.ts`
 - `src/app/services/run-compare-service.ts`
-- `src/web/routes.ts`
-- `web/src/pages/RunDetailPage.tsx`
-- `web/src/pages/RunComparisonPage.tsx`
-- `web/src/pages/HomePage.tsx`
-
-### 子任务
-
-1. 统一 tokenUsage 与 duration 聚合口径
-2. 提供高耗时、高 token 节点摘要
-3. 在 run detail / comparison 中补充成本视角
-4. 在 workflow 或首页提供最近运行成本摘要
-5. 补成本统计测试
-
-### 建议产出
-
-- 成本观测 DTO
-- 成本摘要面板
-- 成本聚合测试
-
-### 验收标准
-
-- 用户能识别“哪里慢”“哪里贵”
-- comparison 可看到成本差异
-- 统计口径在不同页面一致
-
----
-
-## M6. 质量观测能力
-
-### 目标
-
-建立 workflow 级质量聚合与质量概览能力。
-
-### 重点范围
-
-- `src/app/dto.ts`
 - `src/app/services/diagnostics-service.ts`
-- `src/web/routes.ts`
-- `web/src/pages/HomePage.tsx`
-- `web/src/pages/DiagnosticsPage.tsx`
-- `web/src/pages/RunsPage.tsx`
-
-### 子任务
-
-1. 聚合 workflow 成功率 / 失败率
-2. 聚合 gate 等待频次
-3. 聚合失败类型分布
-4. 聚合最近运行 eval 摘要
-5. 在首页或 diagnostics 中展示质量概览
-
-### 建议产出
-
-- 质量观测 DTO
-- 质量概览卡片或摘要区
-- 质量统计测试
-
-### 验收标准
-
-- 用户能快速判断某个 workflow 是否健康
-- 失败和 gate 问题具备基础分布视图
-- 为趋势分析预留稳定字段
-
----
-
-## M7. 统计与聚合层适度整理
-
-### 目标
-
-适度整理恢复、成本、质量相关聚合逻辑，为第三期趋势分析做结构预留。
-
-### 重点范围
-
-- `src/app/services/*`
 - `src/app/dto.ts`
 - `src/web/routes.ts`
 
 ### 子任务
 
-1. 收敛重复聚合逻辑
-2. 统一 workflow metrics / run metrics 入口
-3. 清理临时兼容字段
-4. 补充统计口径说明
+1. 收敛重复的版本和趋势聚合逻辑
+2. 明确快照 DTO、trend DTO、recap DTO 的职责边界
+3. 清理明显无价值的兼容字段
+4. 补统计口径说明
 5. 补必要的低风险回归测试
 
 ### 建议产出
 
 - 轻量聚合层整理
-- 统计口径说明文档
+- 口径说明文档
 - 低风险结构回归测试
 
 ### 验收标准
 
 - 聚合逻辑不再分散在多个页面和服务里
-- 统计字段含义更清晰
-- 第三期趋势能力不需要重新大面积返工
+- 版本、趋势、复盘三类字段含义更清晰
+- 下一轮趋势与复盘增强不需要大面积返工
 

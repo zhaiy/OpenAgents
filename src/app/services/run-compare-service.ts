@@ -1,17 +1,21 @@
 import { StateManager } from '../../engine/state.js';
 import { randomUUID } from 'node:crypto';
 import type {
+  ChangeImpactType,
   ComparisonSummary,
   DurationDiff,
   InputDiff,
   InputDiffType,
+  NodeConfigDiff,
   NodeStatusDiff,
   OutputDiffItem,
   RunComparisonDto,
   RunComparisonSessionDto,
   TokenUsage,
+  WorkflowConfigDiff,
 } from '../dto.js';
-import { aggregateTokenUsage, computeDurationOrNow, computePercentChange } from './run-metrics.js';
+import type { RunState, StepSnapshot, StepState } from '../../types/index.js';
+import { aggregateTokenUsageOptional, computeDurationOrNow, computePercentChange } from './run-metrics.js';
 
 /**
  * Default session TTL: 30 minutes
@@ -32,6 +36,11 @@ const MAX_OUTPUT_PREVIEW_LENGTH = 200;
  * - Output diff with previews
  * - Comparison summary with recommendations
  * - Session TTL management
+ *
+ * E2 Enhancement:
+ * - Workflow configuration diff (structure, agent, model, prompt)
+ * - Distinction between execution path changes and output risk changes
+ * - Version provenance tracking via workflow snapshots
  */
 export class RunCompareService {
   private readonly sessions = new Map<string, RunComparisonSessionDto>();
@@ -50,6 +59,9 @@ export class RunCompareService {
   compare(runAId: string, runBId: string): RunComparisonDto {
     const runA = this.stateManager.findRunById(runAId);
     const runB = this.stateManager.findRunById(runBId);
+
+    // E2: Compute workflow config diff
+    const workflowConfigDiff = this.computeWorkflowConfigDiff(runA, runB);
 
     // Compute all diffs
     const inputDiff = this.computeInputDiff(runA.inputData, runB.inputData);
@@ -71,12 +83,14 @@ export class RunCompareService {
       tokenUsageDiff,
       runA,
       runB,
+      workflowConfigDiff,
     );
 
     return {
       runAId,
       runBId,
       workflowInfo,
+      workflowConfigDiff: workflowConfigDiff?.isSameConfig === false ? workflowConfigDiff : undefined,
       inputDiff: inputDiff.length > 0 ? inputDiff : undefined,
       inputDiffSummary,
       statusDiff: {
@@ -176,6 +190,242 @@ export class RunCompareService {
     };
   }
 
+  /**
+   * E2: Compute workflow configuration differences between two runs.
+   * Aggregates structural changes, node config changes, and classifies impact type.
+   */
+  private computeWorkflowConfigDiff(runA: RunState, runB: RunState): WorkflowConfigDiff | undefined {
+    const snapshotA = runA.workflowSnapshot;
+    const snapshotB = runB.workflowSnapshot;
+
+    // If neither run has a snapshot, we can't compare configs
+    if (!snapshotA && !snapshotB) {
+      return undefined;
+    }
+
+    // If only one has a snapshot, configurations differ
+    if (!snapshotA || !snapshotB) {
+      return {
+        isSameConfig: false,
+        versionHashA: snapshotA?.versionHash,
+        versionHashB: snapshotB?.versionHash,
+        structureDiff: {
+          addedNodes: snapshotB ? Object.keys(snapshotB.steps) : [],
+          removedNodes: snapshotA ? Object.keys(snapshotA.steps) : [],
+        },
+        nodeDiffs: [],
+        summary: {
+          totalChanges: 1,
+          executionPathChanges: 1,
+          outputRiskChanges: 0,
+        },
+      };
+    }
+
+    // Compare version hashes
+    if (snapshotA.versionHash === snapshotB.versionHash) {
+      return {
+        isSameConfig: true,
+        versionHashA: snapshotA.versionHash,
+        versionHashB: snapshotB.versionHash,
+        nodeDiffs: [],
+        summary: {
+          totalChanges: 0,
+          executionPathChanges: 0,
+          outputRiskChanges: 0,
+        },
+      };
+    }
+
+    // Compare step configurations
+    const keysA = new Set(Object.keys(snapshotA.steps));
+    const keysB = new Set(Object.keys(snapshotB.steps));
+    const allKeys = new Set([...keysA, ...keysB]);
+
+    const addedNodes: string[] = [];
+    const removedNodes: string[] = [];
+    const nodeDiffs: NodeConfigDiff[] = [];
+
+    let executionPathChanges = 0;
+    let outputRiskChanges = 0;
+
+    for (const nodeId of allKeys) {
+      const stepA = snapshotA.steps[nodeId];
+      const stepB = snapshotB.steps[nodeId];
+
+      // Node only in one workflow
+      if (!stepA) {
+        addedNodes.push(nodeId);
+        executionPathChanges++;
+        continue;
+      }
+      if (!stepB) {
+        removedNodes.push(nodeId);
+        executionPathChanges++;
+        continue;
+      }
+
+      // Compare node configurations
+      const nodeDiff = this.computeNodeConfigDiff(nodeId, stepA, stepB);
+      if (nodeDiff) {
+        nodeDiffs.push(nodeDiff);
+        if (nodeDiff.impactType === 'execution_path' || nodeDiff.impactType === 'both') {
+          executionPathChanges++;
+        }
+        if (nodeDiff.impactType === 'output_risk' || nodeDiff.impactType === 'both') {
+          outputRiskChanges++;
+        }
+      }
+    }
+
+    const structureDiff = addedNodes.length > 0 || removedNodes.length > 0
+      ? { addedNodes, removedNodes }
+      : undefined;
+
+    return {
+      isSameConfig: false,
+      versionHashA: snapshotA.versionHash,
+      versionHashB: snapshotB.versionHash,
+      structureDiff,
+      nodeDiffs,
+      summary: {
+        totalChanges: nodeDiffs.length + (structureDiff ? addedNodes.length + removedNodes.length : 0),
+        executionPathChanges,
+        outputRiskChanges,
+      },
+    };
+  }
+
+  /**
+   * E2: Compute configuration differences for a single node between runs.
+   */
+  private computeNodeConfigDiff(
+    nodeId: string,
+    stepA: StepSnapshot,
+    stepB: StepSnapshot,
+  ): NodeConfigDiff | undefined {
+    const changes: NodeConfigDiff = {
+      nodeId,
+      nodeName: stepA.agent.name || stepA.id,
+      impactType: 'output_risk' as ChangeImpactType, // default
+    };
+
+    let hasChange = false;
+
+    // Agent type change (execution path)
+    if (stepA.agent.id !== stepB.agent.id) {
+      changes.agentChanged = {
+        runA: stepA.agent.id,
+        runB: stepB.agent.id,
+      };
+      hasChange = true;
+    }
+
+    // Model change (output risk)
+    if (stepA.agent.model !== stepB.agent.model) {
+      changes.modelChanged = {
+        runA: stepA.agent.model,
+        runB: stepB.agent.model,
+      };
+      hasChange = true;
+    }
+
+    // Prompt change (output risk - but significant)
+    if (stepA.systemPrompt !== stepB.systemPrompt) {
+      // A prompt change is significant if it could affect output quality
+      const isSignificant = this.isPromptChangeSignificant(stepA.systemPrompt, stepB.systemPrompt);
+      changes.promptChanged = {
+        runA: this.truncatePreview(stepA.systemPrompt),
+        runB: this.truncatePreview(stepB.systemPrompt),
+        isSignificant,
+      };
+      hasChange = true;
+    }
+
+    // Task description change (may affect execution path)
+    if (stepA.task !== stepB.task) {
+      changes.taskChanged = {
+        runA: this.truncatePreview(stepA.task),
+        runB: this.truncatePreview(stepB.task),
+      };
+      hasChange = true;
+    }
+
+    // Dependencies change (execution path)
+    const depsA = stepA.dependsOn || [];
+    const depsB = stepB.dependsOn || [];
+    const sortedDepsA = [...depsA].sort();
+    const sortedDepsB = [...depsB].sort();
+    if (JSON.stringify(sortedDepsA) !== JSON.stringify(sortedDepsB)) {
+      const added = depsB.filter((d) => !depsA.includes(d));
+      const removed = depsA.filter((d) => !depsB.includes(d));
+      changes.dependenciesChanged = {
+        runA: depsA,
+        runB: depsB,
+        added,
+        removed,
+      };
+      hasChange = true;
+    }
+
+    // Gate type change (execution path)
+    if (stepA.gate !== stepB.gate) {
+      changes.gateChanged = {
+        runA: stepA.gate,
+        runB: stepB.gate,
+      };
+      hasChange = true;
+    }
+
+    if (!hasChange) {
+      return undefined;
+    }
+
+    // Determine overall impact type
+    // Execution path: agent, dependencies, gate changes
+    // Output risk: model, prompt changes
+    const hasExecutionPathChange = changes.agentChanged || changes.dependenciesChanged || changes.gateChanged;
+    const hasOutputRiskChange = changes.modelChanged || changes.promptChanged || changes.taskChanged;
+
+    if (hasExecutionPathChange && hasOutputRiskChange) {
+      changes.impactType = 'both';
+    } else if (hasExecutionPathChange) {
+      changes.impactType = 'execution_path';
+    } else {
+      changes.impactType = 'output_risk';
+    }
+
+    return changes;
+  }
+
+  /**
+   * Determine if a prompt change is significant enough to affect output quality.
+   */
+  private isPromptChangeSignificant(promptA: string, promptB: string): boolean {
+    // Simple heuristic: if the length difference is more than 20% or key phrases changed
+    const lenA = promptA.length;
+    const lenB = promptB.length;
+    const lengthDiffRatio = Math.abs(lenA - lenB) / Math.max(lenA, lenB);
+
+    // If length changed significantly
+    if (lengthDiffRatio > 0.2) {
+      return true;
+    }
+
+    // If the prompts are very different in content (simple word-based comparison)
+    const wordsA = new Set(promptA.toLowerCase().split(/\s+/));
+    const wordsB = new Set(promptB.toLowerCase().split(/\s+/));
+    const commonWords = [...wordsA].filter((w) => wordsB.has(w)).length;
+    const totalWords = new Set([...wordsA, ...wordsB]).size;
+
+    // If more than 30% of words are different
+    if (totalWords > 0 && (totalWords - commonWords) / totalWords > 0.3) {
+      return true;
+    }
+
+    return false;
+  }
+
   private computeInputDiff(
     inputDataA?: Record<string, unknown>,
     inputDataB?: Record<string, unknown>,
@@ -261,8 +511,8 @@ export class RunCompareService {
   }
 
   private computeNodeStatusDiff(
-    stepsA: Record<string, { status: string; startedAt?: number; completedAt?: number; errorMessage?: string }>,
-    stepsB: Record<string, { status: string; startedAt?: number; completedAt?: number; errorMessage?: string }>,
+    stepsA: Record<string, StepState>,
+    stepsB: Record<string, StepState>,
   ): NodeStatusDiff[] {
     const diffs: NodeStatusDiff[] = [];
     const keysA = new Set(Object.keys(stepsA));
@@ -300,8 +550,8 @@ export class RunCompareService {
           durationDiff: hasDurationDiff
             ? { runA: durationA, runB: durationB, delta: durationB! - durationA! }
             : undefined,
-          errorA: stepA.errorMessage,
-          errorB: stepB.errorMessage,
+          errorA: stepA.error,
+          errorB: stepB.error,
           isCritical,
         });
       }
@@ -354,8 +604,8 @@ export class RunCompareService {
     stepsA: Record<string, { tokenUsage?: TokenUsage }>,
     stepsB: Record<string, { tokenUsage?: TokenUsage }>,
   ): RunComparisonDto['tokenUsageDiff'] | undefined {
-    const usageA = this.sumTokenUsage(stepsA);
-    const usageB = this.sumTokenUsage(stepsB);
+    const usageA = aggregateTokenUsageOptional(stepsA);
+    const usageB = aggregateTokenUsageOptional(stepsB);
 
     if (!usageA && !usageB) return undefined;
     if (!usageA || !usageB) {
@@ -441,6 +691,7 @@ export class RunCompareService {
     tokenUsageDiff: RunComparisonDto['tokenUsageDiff'] | undefined,
     runA: { status: string },
     runB: { status: string },
+    workflowConfigDiff?: WorkflowConfigDiff,
   ): ComparisonSummary {
     const keyDifferences: string[] = [];
     const recommendations: string[] = [];
@@ -466,6 +717,62 @@ export class RunCompareService {
       }
       if (nodeDiffSummary.onlyInA > 0 || nodeDiffSummary.onlyInB > 0) {
         keyDifferences.push(`Different node structure between runs`);
+      }
+    }
+
+    // E2: Workflow config differences
+    let versionDiffSummary: ComparisonSummary['versionDiffSummary'];
+    if (workflowConfigDiff && !workflowConfigDiff.isSameConfig) {
+      const { summary } = workflowConfigDiff;
+
+      if (summary.executionPathChanges > 0) {
+        keyDifferences.push(`${summary.executionPathChanges} structural change(s) in workflow`);
+      }
+      if (summary.outputRiskChanges > 0) {
+        keyDifferences.push(`${summary.outputRiskChanges} configuration change(s) detected`);
+      }
+
+      // Generate impact assessment
+      let impactAssessment = '';
+      if (summary.executionPathChanges > 0 && summary.outputRiskChanges > 0) {
+        impactAssessment = 'Changes may affect both execution path and output quality';
+      } else if (summary.executionPathChanges > 0) {
+        impactAssessment = 'Changes may affect which steps execute and in what order';
+      } else if (summary.outputRiskChanges > 0) {
+        impactAssessment = 'Changes may affect output quality but execution path is similar';
+      }
+
+      let changeDescription = '';
+      if (workflowConfigDiff.structureDiff) {
+        const { addedNodes, removedNodes } = workflowConfigDiff.structureDiff;
+        if (addedNodes.length > 0) {
+          changeDescription += `${addedNodes.length} node(s) added; `;
+        }
+        if (removedNodes.length > 0) {
+          changeDescription += `${removedNodes.length} node(s) removed; `;
+        }
+      }
+
+      const modelChanges = workflowConfigDiff.nodeDiffs.filter((n) => n.modelChanged).length;
+      const promptChanges = workflowConfigDiff.nodeDiffs.filter((n) => n.promptChanged).length;
+      if (modelChanges > 0) {
+        changeDescription += `${modelChanges} node(s) with model change; `;
+      }
+      if (promptChanges > 0) {
+        changeDescription += `${promptChanges} node(s) with prompt change; `;
+      }
+
+      versionDiffSummary = {
+        hasConfigDiff: true,
+        structuralChanges: summary.executionPathChanges,
+        configChanges: summary.outputRiskChanges,
+        changeDescription: changeDescription.trimEnd().replace(/;$/, '') || 'Configuration changed',
+        impactAssessment,
+      };
+
+      // Add warning for significant changes
+      if (summary.executionPathChanges > 0) {
+        warnings.push('Workflow structure has changed - execution path may differ');
       }
     }
 
@@ -517,6 +824,15 @@ export class RunCompareService {
       score -= nodeDiffRatio * 30;
     }
 
+    // E2: Deduct for workflow config differences
+    if (workflowConfigDiff && !workflowConfigDiff.isSameConfig) {
+      const { summary } = workflowConfigDiff;
+      // Structural changes are more significant
+      score -= summary.executionPathChanges * 5;
+      // Config changes (model, prompt) also matter
+      score -= summary.outputRiskChanges * 3;
+    }
+
     // Deduct for status differences
     if (runA.status !== runB.status) {
       score -= 25;
@@ -537,20 +853,7 @@ export class RunCompareService {
       keyDifferences,
       recommendations,
       warnings,
-    };
-  }
-
-  private sumTokenUsage(
-    steps: Record<string, { tokenUsage?: TokenUsage }>,
-  ): TokenUsage | undefined {
-    const aggregated = aggregateTokenUsage(steps);
-    if (!aggregated.hasUsage || aggregated.totalTokens === 0) {
-      return undefined;
-    }
-    return {
-      promptTokens: aggregated.promptTokens,
-      completionTokens: aggregated.completionTokens,
-      totalTokens: aggregated.totalTokens,
+      versionDiffSummary,
     };
   }
 
