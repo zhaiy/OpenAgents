@@ -21,6 +21,59 @@ describe('schema validation', () => {
     expect(result.success).toBe(false);
   });
 
+  describe('per-agent api config', () => {
+    it('accepts agent with api_key', () => {
+      const result = AgentConfigSchema.safeParse({
+        agent: { id: 'writer', name: 'Writer', description: 'desc' },
+        prompt: { system: 'system prompt' },
+        runtime: { type: 'llm-direct', model: 'qwen-plus', api_key: 'agent-key', timeout_seconds: 30 },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts agent with api_base_url', () => {
+      const result = AgentConfigSchema.safeParse({
+        agent: { id: 'writer', name: 'Writer', description: 'desc' },
+        prompt: { system: 'system prompt' },
+        runtime: { type: 'llm-direct', model: 'qwen-plus', api_base_url: 'https://api.example.com/v1', timeout_seconds: 30 },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts agent with both api_key and api_base_url', () => {
+      const result = AgentConfigSchema.safeParse({
+        agent: { id: 'writer', name: 'Writer', description: 'desc' },
+        prompt: { system: 'system prompt' },
+        runtime: {
+          type: 'llm-direct',
+          model: 'qwen-plus',
+          api_key: 'agent-key',
+          api_base_url: 'https://api.example.com/v1',
+          timeout_seconds: 30,
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects invalid api_base_url format', () => {
+      const result = AgentConfigSchema.safeParse({
+        agent: { id: 'writer', name: 'Writer', description: 'desc' },
+        prompt: { system: 'system prompt' },
+        runtime: { type: 'llm-direct', model: 'qwen-plus', api_base_url: 'not-a-url', timeout_seconds: 30 },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('accepts agent without api config (uses project defaults)', () => {
+      const result = AgentConfigSchema.safeParse({
+        agent: { id: 'writer', name: 'Writer', description: 'desc' },
+        prompt: { system: 'system prompt' },
+        runtime: { type: 'llm-direct', model: 'qwen-plus', timeout_seconds: 30 },
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   it('accepts valid workflow config', () => {
     const result = WorkflowConfigSchema.safeParse({
       workflow: { id: 'novel_writing', name: 'Novel', description: 'desc' },

@@ -158,6 +158,8 @@ export const AgentConfigSchema = z
     runtime: z.object({
       type: RuntimeTypeSchema,
       model: z.string().optional(),
+      api_key: z.string().optional(),
+      api_base_url: z.string().url().optional(),
       timeout_seconds: z.number().int().positive().default(300),
     }),
     script: z

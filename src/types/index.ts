@@ -23,6 +23,8 @@ export interface AgentConfig {
   runtime: {
     type: RuntimeType;
     model?: string;
+    api_key?: string;
+    api_base_url?: string;
     timeout_seconds: number;
   };
   script?: {

@@ -56,3 +56,132 @@ describe('runtime factory', () => {
     expect(() => createRuntime('openclaw', projectConfig)).toThrow();
   });
 });
+
+describe('per-agent api config priority', () => {
+  it('uses agent-level api_key over project-level', () => {
+    // Clean env
+    delete process.env.OPENAGENTS_API_KEY;
+    delete process.env.OPENAGENTS_API_BASE_URL;
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'qwen-plus',
+        api_key: 'agent-level-key',
+        timeout_seconds: 30,
+      },
+    };
+
+    // Should not throw because agent has its own api_key
+    const runtime = createRuntime('llm-direct', projectConfig, agentConfig);
+    expect(runtime).toBeTruthy();
+  });
+
+  it('uses agent-level api_base_url over project-level', () => {
+    process.env.OPENAGENTS_API_KEY = 'test-key';
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'qwen-plus',
+        api_base_url: 'https://agent-specific.api.com/v1',
+        timeout_seconds: 30,
+      },
+    };
+
+    const runtime = createRuntime('llm-direct', projectConfig, agentConfig);
+    expect(runtime).toBeTruthy();
+
+    delete process.env.OPENAGENTS_API_KEY;
+  });
+
+  it('falls back to project-level api_key when agent has none', () => {
+    delete process.env.OPENAGENTS_API_KEY;
+    delete process.env.OPENAGENTS_API_BASE_URL;
+
+    const projectConfigWithKey: ProjectConfig = {
+      ...projectConfig,
+      runtime: {
+        ...projectConfig.runtime,
+        api_key: 'project-level-key',
+      },
+    };
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'qwen-plus',
+        // No api_key specified - should use project-level
+        timeout_seconds: 30,
+      },
+    };
+
+    // Should not throw because project has api_key
+    const runtime = createRuntime('llm-direct', projectConfigWithKey, agentConfig);
+    expect(runtime).toBeTruthy();
+  });
+
+  it('falls back to env var when neither agent nor project has api_key', () => {
+    process.env.OPENAGENTS_API_KEY = 'env-level-key';
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'qwen-plus',
+        timeout_seconds: 30,
+      },
+    };
+
+    // Should not throw because env var is set
+    const runtime = createRuntime('llm-direct', projectConfig, agentConfig);
+    expect(runtime).toBeTruthy();
+
+    delete process.env.OPENAGENTS_API_KEY;
+  });
+
+  it('throws when no api_key is available anywhere', () => {
+    delete process.env.OPENAGENTS_API_KEY;
+    delete process.env.OPENAGENTS_API_BASE_URL;
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'qwen-plus',
+        timeout_seconds: 30,
+      },
+    };
+
+    // Should throw because no api_key in agent, project, or env
+    expect(() => createRuntime('llm-direct', projectConfig, agentConfig)).toThrow();
+  });
+
+  it('uses both agent-level api_key and api_base_url together', () => {
+    delete process.env.OPENAGENTS_API_KEY;
+    delete process.env.OPENAGENTS_API_BASE_URL;
+
+    const agentConfig: AgentConfig = {
+      agent: { id: 'writer', name: 'Writer', description: 'Test agent' },
+      prompt: { system: 'test' },
+      runtime: {
+        type: 'llm-direct',
+        model: 'glm-4',
+        api_key: 'glm-api-key',
+        api_base_url: 'https://open.bigmodel.cn/api/paas/v4',
+        timeout_seconds: 300,
+      },
+    };
+
+    const runtime = createRuntime('llm-direct', projectConfig, agentConfig);
+    expect(runtime).toBeTruthy();
+  });
+});

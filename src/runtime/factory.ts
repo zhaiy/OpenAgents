@@ -10,8 +10,8 @@ export function createRuntime(
   switch (type) {
     case 'llm-direct':
       return new LLMDirectRuntime({
-        apiKey: projectConfig.runtime.api_key,
-        baseUrl: projectConfig.runtime.api_base_url,
+        apiKey: agentConfig?.runtime.api_key ?? projectConfig.runtime.api_key,
+        baseUrl: agentConfig?.runtime.api_base_url ?? projectConfig.runtime.api_base_url,
       });
     case 'script':
       return new ScriptRuntime({
