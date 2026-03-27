@@ -51,7 +51,16 @@ OpenAgents 适合那些“让 Agent 跑起来”还不够的场景。
 
 - 基于 OpenAI-compatible 风格的 `llm-direct` runtime
 - 自动兼容把推理结果放在 `reasoning_content` 的 provider
-- 自动兼容“请求流式但返回普通 JSON”的 provider
+- 自动兼容"请求流式但返回普通 JSON"的 provider
+
+### 灵活配置
+
+- **每个 Agent 独立 API 配置**: 支持在每个 Agent 级别覆盖项目级 API 凭证
+  - Agent 级别的 `api_key` 和 `api_base_url` 优先级最高
+  - 回退顺序：Agent 配置 > 项目配置 > 环境变量
+- **独立摘要 API**: 为上下文压缩任务使用独立的 API 凭证
+  - 为摘要任务配置独立的 `summary_api_key` 和 `summary_api_base_url`
+  - 可使用不同的 LLM Provider 处理主任务和上下文摘要
 
 ## 快速开始
 
@@ -229,6 +238,35 @@ steps:
     task: "基于以下内容写作：{{context.research}}"
 ```
 
+### 每个 Agent 独立 API 配置
+
+```yaml
+agents:
+  - id: researcher
+    runtime:
+      type: llm-direct
+      model: gpt-4
+      api_key: sk-researcher-key  # 覆盖项目级别 API 密钥
+      api_base_url: https://api.research-provider.com
+      timeout_seconds: 300
+
+  - id: writer
+    runtime:
+      type: llm-direct
+      model: claude-sonnet
+      # 回退到项目级别配置
+```
+
+### 独立摘要 API 配置
+
+```yaml
+context:
+  strategy: summarize
+  summary_model: qwen-plus
+  summary_api_key: sk-summary-key  # 专用于摘要的 API 密钥
+  summary_api_base_url: https://api.summary-provider.com
+```
+
 ### 错误恢复
 
 ```yaml
@@ -317,6 +355,66 @@ output_format: 返回 JSON，包含 "result" 和 "steps" 字段。
 ```text
 {{skills.math.instructions}}
 ```
+
+## Web UI (Beta)
+
+OpenAgents 包含一个本地优先的 Web 界面，用于运行和监控工作流。
+
+### 快速开始
+
+```bash
+# 终端 1: 启动后端 API 服务
+npm run web
+
+# 终端 2: 启动前端开发服务器
+npm run web:dev
+
+# 在浏览器中打开 http://localhost:5173
+```
+
+### Web UI 功能
+
+- **首页**: 仪表板显示"需要关注"区域（失败运行、等待门控）、快捷操作、最近运行
+- **工作流**: 浏览和运行工作流模板，支持搜索和评估筛选
+- **工作流概览**: 交互式 DAG 可视化，显示节点详情和输入模式
+- **运行执行控制台**: 实时 DAG 可视化，带节点状态更新、时间线和流式输出
+- **门控处理**: 用于批准/拒绝/编辑决策的模态对话框，带输出预览
+- **运行详情**: 步骤级详情，带输出预览、日志、Token 使用和评估
+- **诊断**: 失败运行和等待门控监控，带快捷操作
+- **运行对比**: 并排对比两次运行的状态、耗时和 Token 使用差异
+- **重新运行**: 使用相同配置快速重跑，或编辑配置后重跑
+- **设置**: 语言选择（中文/英文）、环境就绪检查、默认运行时选项
+- **恢复计划器**: 为失败运行提供智能恢复建议和影响分析
+- **运行指标**: 跨多次运行的成本观察和质量趋势分析
+- **失败复盘**: 结构化失败摘要，包含错误类型、受影响节点和关键洞察
+- **版本差异**: 对比运行间的工作流配置差异，带影响分类（执行路径 vs 输出风险）
+
+### API 端点
+
+| 方法 | 路径 | 描述 |
+|--------|------|-------------|
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/workflows` | 列出工作流 |
+| GET | `/api/workflows/:id` | 获取工作流详情 |
+| GET | `/api/workflows/:id/visual-summary` | 获取工作流 DAG 可视化数据 |
+| POST | `/api/runs` | 启动新运行 |
+| GET | `/api/runs` | 列出运行 |
+| GET | `/api/runs/:id` | 获取运行详情 |
+| GET | `/api/runs/:id/visual-state` | 获取运行视觉状态（节点状态、活跃节点） |
+| GET | `/api/runs/:id/timeline` | 获取运行时间线事件 |
+| GET | `/api/runs/:id/events` | 获取运行事件 |
+| GET | `/api/runs/:id/stream` | SSE 事件流，带序列号 |
+| POST | `/api/runs/:id/resume` | 恢复中断的运行 |
+| POST | `/api/runs/:id/rerun` | 使用相同或修改的配置重跑 |
+| POST | `/api/runs/:id/gates/:stepId/action` | 提交门控操作 |
+| GET | `/api/diagnostics/failed-runs` | 获取所有失败运行 |
+| GET | `/api/diagnostics/waiting-gates` | 获取所有等待门控 |
+| GET | `/api/diagnostics/runs/:id` | 获取运行诊断 |
+| GET | `/api/runs/compare` | 对比两次运行 |
+| GET | `/api/runs/:id/metrics` | 获取运行指标（成本、质量、Token 使用） |
+| GET | `/api/runs/:id/recovery-preview` | 获取失败运行的恢复计划预览 |
+| GET | `/api/runs/:id/version-diff` | 对比运行间的工作流配置版本差异 |
+| GET | `/api/settings` | 获取设置 |
 
 ## 项目结构
 

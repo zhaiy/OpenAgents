@@ -53,6 +53,15 @@ You can inspect progress in real time, pause at critical gates, resume interrupt
 - Automatic fallback for providers that return reasoning output in `reasoning_content`
 - Automatic adaptation when a "streaming" request returns normal JSON instead of SSE
 
+### Flexible Configuration
+
+- **Per-Agent API Configuration**: Override project-level API credentials per agent
+  - Agent-level `api_key` and `api_base_url` take priority
+  - Falls back to project config, then environment variables
+- **Independent Summary API**: Dedicated API credentials for context compression
+  - Separate `summary_api_key` and `summary_api_base_url` for summarization tasks
+  - Use different LLM providers for main tasks and context summarization
+
 ## Quick Start
 
 ### 1. Install
@@ -229,6 +238,35 @@ steps:
     task: "Write using: {{context.research}}"
 ```
 
+### Per-Agent API Configuration
+
+```yaml
+agents:
+  - id: researcher
+    runtime:
+      type: llm-direct
+      model: gpt-4
+      api_key: sk-researcher-key  # Override project-level API key
+      api_base_url: https://api.research-provider.com
+      timeout_seconds: 300
+
+  - id: writer
+    runtime:
+      type: llm-direct
+      model: claude-sonnet
+      # Falls back to project-level config
+```
+
+### Independent Summary API Configuration
+
+```yaml
+context:
+  strategy: summarize
+  summary_model: qwen-plus
+  summary_api_key: sk-summary-key  # Dedicated API key for summarization
+  summary_api_base_url: https://api.summary-provider.com
+```
+
 ### Error Recovery
 
 ```yaml
@@ -346,6 +384,10 @@ npm run web:dev
 - **Run Comparison**: Side-by-side comparison of two runs with status, duration, and token usage diffs
 - **Re-run**: Quick rerun with same config or edit-and-rerun with modified inputs
 - **Settings**: Language selection (English/Chinese), environment readiness, default runtime options
+- **Recovery Planner**: Intelligent recovery suggestions for failed runs with impact analysis
+- **Run Metrics**: Cost observation and quality trend analysis across multiple runs
+- **Failure Recap**: Structured failure summaries with error type, affected nodes, and key insights
+- **Version Diff**: Compare workflow configurations between runs with impact classification (execution path vs output risk)
 
 ### API Endpoints
 
@@ -369,6 +411,9 @@ npm run web:dev
 | GET | `/api/diagnostics/waiting-gates` | Get all waiting gates |
 | GET | `/api/diagnostics/runs/:id` | Get run diagnostics |
 | GET | `/api/runs/compare` | Compare two runs |
+| GET | `/api/runs/:id/metrics` | Get run metrics (cost, quality, token usage) |
+| GET | `/api/runs/:id/recovery-preview` | Get recovery plan preview for failed run |
+| GET | `/api/runs/:id/version-diff` | Compare workflow config versions between runs |
 | GET | `/api/settings` | Get settings |
 
 ## Project Layout
