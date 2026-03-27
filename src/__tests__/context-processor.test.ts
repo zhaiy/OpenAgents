@@ -10,6 +10,13 @@ const mockRuntime: AgentRuntime = {
   })),
 };
 
+const mockDedicatedRuntime: AgentRuntime = {
+  execute: vi.fn(async () => ({
+    output: '这是专用模型的摘要内容。',
+    duration: 50,
+  })),
+};
+
 describe('processContext', () => {
   it('returns raw content when strategy is raw', async () => {
     const content = '这是原始内容';
@@ -115,5 +122,41 @@ describe('processContext', () => {
     });
     // Exactly at threshold should use raw
     expect(result).toBe(content);
+  });
+
+  it('uses dedicated runtime when provided for summarize strategy', async () => {
+    const content = 'a'.repeat(10000); // ~2500 tokens
+    const result = await processContext({
+      rawContent: content,
+      strategy: 'summarize',
+      maxTokens: 100,
+      summarizeRuntime: mockDedicatedRuntime,
+      summarizeModel: 'dedicated-model',
+    });
+    expect(result).toBe('这是专用模型的摘要内容。');
+    expect(mockDedicatedRuntime.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: 'You are a text summarization assistant.',
+        model: 'dedicated-model',
+      }),
+    );
+  });
+
+  it('uses provided runtime for summarize strategy', async () => {
+    const content = 'a'.repeat(10000);
+    const result = await processContext({
+      rawContent: content,
+      strategy: 'summarize',
+      maxTokens: 100,
+      summarizeRuntime: mockRuntime,
+      summarizeModel: 'test-model',
+    });
+    expect(result).toBe('这是摘要内容。');
+    expect(mockRuntime.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: 'You are a text summarization assistant.',
+        model: 'test-model',
+      }),
+    );
   });
 });

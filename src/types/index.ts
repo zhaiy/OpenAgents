@@ -160,6 +160,8 @@ export interface ProjectConfig {
     auto_raw_threshold?: number;
     auto_truncate_threshold?: number;
     summary_model?: string;
+    summary_api_key?: string;
+    summary_api_base_url?: string;
   };
 }
 

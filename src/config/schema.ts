@@ -274,6 +274,8 @@ export const ProjectConfigSchema = z.object({
       auto_raw_threshold: z.number().int().positive().default(500),
       auto_truncate_threshold: z.number().int().positive().default(2000),
       summary_model: z.string().optional(),
+      summary_api_key: z.string().optional(),
+      summary_api_base_url: z.string().url().optional(),
     })
     .optional(),
 }) satisfies z.ZodType<ProjectConfig>;

@@ -7,6 +7,7 @@ import { GateRejectError, RuntimeError, WorkflowInterruptError } from '../errors
 import { EventLogger } from '../output/logger.js';
 import { OutputWriter } from '../output/writer.js';
 import { sendWebhookNotification } from '../output/notifier.js';
+import { LLMDirectRuntime } from '../runtime/llm-direct.js';
 import type {
   AgentConfig,
   AgentRuntime,
@@ -493,6 +494,20 @@ export class WorkflowEngine {
       const sourceOutputPath = path.join(runDir, sourceStep.outputFile);
       const rawContent = fs.readFileSync(sourceOutputPath, 'utf8');
 
+      // Determine summary model and runtime
+      const summarizeModel = projectConfig.context?.summary_model || agent.runtime.model || projectConfig.runtime.default_model;
+
+      // Check if independent summary API credentials are configured
+      const hasIndependentSummaryConfig = projectConfig.context?.summary_api_key && projectConfig.context?.summary_api_base_url;
+
+      // Create summary runtime: use dedicated runtime if independent config exists, otherwise reuse agent runtime
+      const summarizeRuntime = hasIndependentSummaryConfig
+        ? new LLMDirectRuntime({
+            apiKey: projectConfig.context!.summary_api_key,
+            baseUrl: projectConfig.context!.summary_api_base_url,
+          })
+        : this.deps.runtimeFactory(agent.runtime.type, projectConfig, agent);
+
       const processedContent = await processContext({
         rawContent,
         strategy,
@@ -503,8 +518,8 @@ export class WorkflowEngine {
               truncateLimit: projectConfig.context.auto_truncate_threshold ?? 2000,
             }
           : undefined,
-        summarizeRuntime: this.deps.runtimeFactory(agent.runtime.type, projectConfig, agent),
-        summarizeModel: projectConfig.context?.summary_model || agent.runtime.model || projectConfig.runtime.default_model,
+        summarizeRuntime,
+        summarizeModel,
       });
 
       processedContexts[from] = processedContent;
