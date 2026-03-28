@@ -44,26 +44,35 @@ export class ScriptRuntime implements AgentRuntime {
     const timeoutMs = params.timeoutSeconds * 1000;
 
     try {
+      const sandbox = Object.create(null) as {
+        require: (id: string) => unknown;
+        __input: string;
+        __systemPrompt: string;
+        process: { env: Record<string, string | undefined> };
+        __print: (_msg: string) => void;
+      };
+
       // SECURITY: Create a minimal sandbox with restricted access.
       // - No fs/path modules: prevents arbitrary file system access
       // - Filtered env vars: prevents API key leakage
       // - No console: prevents information disclosure
       // - No cwd: prevents directory enumeration
-      const sandbox = {
-        require: this.safeRequire.bind(this),
-        __input: params.userPrompt,
-        __systemPrompt: params.systemPrompt,
-        process: {
-          env: this.filterEnvVars(),
-          // Expose only safe env vars, not cwd
-        },
-        // Provide a safe print function for script output instead of console
-        __print: (_msg: string): void => {
-          void _msg; // Silently absorb print output to prevent info leakage
-        },
+      sandbox.require = this.safeRequire.bind(this);
+      sandbox.__input = params.userPrompt;
+      sandbox.__systemPrompt = params.systemPrompt;
+      sandbox.process = {
+        env: this.filterEnvVars(),
+      };
+      sandbox.__print = (_msg: string): void => {
+        void _msg; // Silently absorb print output to prevent info leakage
       };
 
-      const context = vm.createContext(sandbox);
+      const context = vm.createContext(sandbox, {
+        codeGeneration: {
+          strings: false,
+          wasm: false,
+        },
+      });
       // SECURITY: Wrap script with input variables only, no console access
       const wrappedScript = `
         (async function() {

@@ -16,6 +16,11 @@ import type {
   ScriptPostProcessorConfig,
   Script_toolConfig,
   SkillConfig,
+  SkillDependencies,
+  SkillExample,
+  SkillMeta,
+  SkillPermissions,
+  SkillRiskLevel,
   StepConfig,
   StepContextConfig,
   ToolConfig,
@@ -65,16 +70,9 @@ const ScriptPostProcessorConfigSchema = z.object({
   }
 }) satisfies z.ZodType<ScriptPostProcessorConfig>;
 
-export const SkillConfigSchema = z.object({
-  skill: z.object({
-    id: z.string().regex(idRegex, 'must start with lowercase letter and only contain a-z, 0-9, _ or -'),
-    name: z.string().min(1),
-    description: z.string().min(1),
-    version: z.string().min(1),
-  }),
-  instructions: z.string().min(1),
-  output_format: z.string().optional(),
-}) satisfies z.ZodType<SkillConfig>;
+// =============================================================================
+// Tool Configuration Schema (used by Skills and Agents)
+// =============================================================================
 
 const MCP_toolConfigSchema = z.object({
   type: z.literal('mcp'),
@@ -89,6 +87,51 @@ const Script_toolConfigSchema = z.object({
 }) satisfies z.ZodType<Script_toolConfig>;
 
 const ToolConfigSchema: z.ZodType<ToolConfig> = z.union([MCP_toolConfigSchema, Script_toolConfigSchema]);
+
+// =============================================================================
+// Skill Configuration Schema (F1: Standardized Skill Specification)
+// =============================================================================
+
+const SkillRiskLevelSchema = z.enum(['low', 'medium', 'high']) satisfies z.ZodType<SkillRiskLevel>;
+
+const SkillPermissionsSchema = z.object({
+  network: z.boolean().optional(),
+  filesystem: z.enum(['none', 'read-only', 'read-write']).optional(),
+  environment: z.array(z.string()).optional(),
+}) satisfies z.ZodType<SkillPermissions>;
+
+const SkillDependenciesSchema = z.object({
+  skills: z.array(z.string()).optional(),
+  tools: z.array(ToolConfigSchema).optional(),
+}) satisfies z.ZodType<SkillDependencies>;
+
+const SkillExampleSchema = z.object({
+  input: z.record(z.string(), z.unknown()),
+  output_preview: z.string().optional(),
+}) satisfies z.ZodType<SkillExample>;
+
+const SkillMetaSchema = z.object({
+  id: z.string().regex(idRegex, 'must start with lowercase letter and only contain a-z, 0-9, _ or -'),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  version: z.string().min(1),
+  author: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  homepage: z.string().url().optional(),
+  repository: z.string().url().optional(),
+}) satisfies z.ZodType<SkillMeta>;
+
+export const SkillConfigSchema = z.object({
+  skill: SkillMetaSchema,
+  instructions: z.string().min(1),
+  output_format: z.string().optional(),
+  input_schema: z.record(z.string(), z.unknown()).optional(),
+  permissions: SkillPermissionsSchema.optional(),
+  dependencies: SkillDependenciesSchema.optional(),
+  risk_level: SkillRiskLevelSchema.optional(),
+  risk_description: z.string().optional(),
+  examples: z.array(SkillExampleSchema).optional(),
+}) satisfies z.ZodType<SkillConfig>;
 
 const ContextStrategySchema = z.enum(['raw', 'truncate', 'summarize', 'auto']) satisfies z.ZodType<ContextStrategy>;
 

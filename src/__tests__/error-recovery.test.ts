@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { GateRejectError, RuntimeError } from '../errors.js';
-import { sendWebhookNotification } from '../output/notifier.js';
+import * as notifier from '../output/notifier.js';
 
 // Mock fetch for webhook tests
 const mockFetch = vi.fn();
@@ -10,17 +10,28 @@ global.fetch = mockFetch;
 describe('Error Recovery Strategy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(notifier.webhookDns, 'lookupHostname').mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+    // Reset environment variables
+    delete process.env.OPENAGENTS_ALLOW_PRIVATE_WEBHOOKS;
+    delete process.env.OPENAGENTS_ALLOW_HTTP_WEBHOOKS;
+    delete process.env.OPENAGENTS_ENFORCE_HTTPS_WEBHOOKS;
+    delete process.env.OPENAGENTS_WEBHOOK_WHITELIST;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // Clean up environment variables
+    delete process.env.OPENAGENTS_ALLOW_PRIVATE_WEBHOOKS;
+    delete process.env.OPENAGENTS_ALLOW_HTTP_WEBHOOKS;
+    delete process.env.OPENAGENTS_ENFORCE_HTTPS_WEBHOOKS;
+    delete process.env.OPENAGENTS_WEBHOOK_WHITELIST;
   });
 
   describe('sendWebhookNotification', () => {
     it('should send POST request to webhook URL', async () => {
       mockFetch.mockResolvedValueOnce({ ok: true });
 
-      await sendWebhookNotification('https://example.com/webhook', {
+      await notifier.sendWebhookNotification('https://example.com/webhook', {
         workflowId: 'test-workflow',
         runId: 'run-123',
         stepId: 'step-1',
@@ -58,7 +69,7 @@ describe('Error Recovery Strategy', () => {
       });
 
       // The function catches errors and logs them, so it shouldn't throw
-      await sendWebhookNotification('https://example.com/webhook', {
+      await notifier.sendWebhookNotification('https://example.com/webhook', {
         workflowId: 'test-workflow',
         runId: 'run-123',
         stepId: 'step-1',
@@ -75,7 +86,7 @@ describe('Error Recovery Strategy', () => {
       mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
       // Should not throw - webhook failures should not block workflow
-      await sendWebhookNotification('https://example.com/webhook', {
+      await notifier.sendWebhookNotification('https://example.com/webhook', {
         workflowId: 'test-workflow',
         runId: 'run-123',
         stepId: 'step-1',
@@ -88,7 +99,22 @@ describe('Error Recovery Strategy', () => {
     });
 
     it('should block private webhook targets by default', async () => {
-      await sendWebhookNotification('http://127.0.0.1:8080/webhook', {
+      await notifier.sendWebhookNotification('http://127.0.0.1:8080/webhook', {
+        workflowId: 'test-workflow',
+        runId: 'run-123',
+        stepId: 'step-1',
+        agent: 'agent-1',
+        error: 'Test error',
+        timestamp: 1234567890,
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should block hostnames resolving to private addresses by default', async () => {
+      vi.spyOn(notifier.webhookDns, 'lookupHostname').mockResolvedValueOnce([{ address: '10.0.0.8', family: 4 }]);
+
+      await notifier.sendWebhookNotification('https://example.com/webhook', {
         workflowId: 'test-workflow',
         runId: 'run-123',
         stepId: 'step-1',
@@ -102,9 +128,10 @@ describe('Error Recovery Strategy', () => {
 
     it('allows private targets when explicitly enabled', async () => {
       process.env.OPENAGENTS_ALLOW_PRIVATE_WEBHOOKS = 'true';
+      process.env.OPENAGENTS_ALLOW_HTTP_WEBHOOKS = 'true';
       mockFetch.mockResolvedValueOnce({ ok: true });
 
-      await sendWebhookNotification('http://127.0.0.1:8080/webhook', {
+      await notifier.sendWebhookNotification('http://127.0.0.1:8080/webhook', {
         workflowId: 'test-workflow',
         runId: 'run-123',
         stepId: 'step-1',
@@ -114,7 +141,92 @@ describe('Error Recovery Strategy', () => {
       });
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      delete process.env.OPENAGENTS_ALLOW_PRIVATE_WEBHOOKS;
+    });
+
+    it('should block HTTP URLs by default (HTTPS enforcement)', async () => {
+      await notifier.sendWebhookNotification('http://example.com/webhook', {
+        workflowId: 'test-workflow',
+        runId: 'run-123',
+        stepId: 'step-1',
+        agent: 'agent-1',
+        error: 'Test error',
+        timestamp: 1234567890,
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('allows HTTP URLs when explicitly enabled', async () => {
+      process.env.OPENAGENTS_ALLOW_HTTP_WEBHOOKS = 'true';
+      mockFetch.mockResolvedValueOnce({ ok: true });
+
+      await notifier.sendWebhookNotification('http://example.com/webhook', {
+        workflowId: 'test-workflow',
+        runId: 'run-123',
+        stepId: 'step-1',
+        agent: 'agent-1',
+        error: 'Test error',
+        timestamp: 1234567890,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows whitelisted domains', async () => {
+      process.env.OPENAGENTS_WEBHOOK_WHITELIST = 'example.com,*.trusted.local';
+      mockFetch.mockResolvedValueOnce({ ok: true });
+
+      // HTTP should be allowed for whitelisted domains
+      await notifier.sendWebhookNotification('http://example.com/webhook', {
+        workflowId: 'test-workflow',
+        runId: 'run-123',
+        stepId: 'step-1',
+        agent: 'agent-1',
+        error: 'Test error',
+        timestamp: 1234567890,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows whitelisted wildcard subdomains', async () => {
+      process.env.OPENAGENTS_WEBHOOK_WHITELIST = '*.trusted.local';
+      process.env.OPENAGENTS_ALLOW_PRIVATE_WEBHOOKS = 'true';
+      mockFetch.mockResolvedValueOnce({ ok: true });
+
+      await notifier.sendWebhookNotification('http://api.trusted.local/webhook', {
+        workflowId: 'test-workflow',
+        runId: 'run-123',
+        stepId: 'step-1',
+        agent: 'agent-1',
+        error: 'Test error',
+        timestamp: 1234567890,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('validateWebhookUrl', () => {
+    it('should validate HTTPS URLs', () => {
+      expect(() => notifier.validateWebhookUrl('https://example.com/webhook')).not.toThrow();
+    });
+
+    it('should reject HTTP URLs by default', () => {
+      expect(() => notifier.validateWebhookUrl('http://example.com/webhook')).toThrow('HTTP webhook URLs are not allowed');
+    });
+
+    it('should reject private addresses with HTTP (HTTP check comes first)', () => {
+      // HTTP check happens before private address check
+      expect(() => notifier.validateWebhookUrl('http://127.0.0.1:8080/webhook')).toThrow('HTTP webhook URLs are not allowed');
+    });
+
+    it('should reject private addresses with HTTPS', () => {
+      expect(() => notifier.validateWebhookUrl('https://127.0.0.1:8080/webhook')).toThrow('Blocked private webhook target');
+    });
+
+    it('should reject unsupported protocols', () => {
+      expect(() => notifier.validateWebhookUrl('ftp://example.com/webhook')).toThrow('Unsupported webhook protocol');
     });
   });
 });

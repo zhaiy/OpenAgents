@@ -1,19 +1,25 @@
 # OpenAgents
 
-Transparent, controllable multi-agent workflow orchestration for the terminal.
+**Agent Orchestration Core** — Transparent, controllable multi-agent workflow orchestration for the terminal.
 
 [中文文档](./README.zh-CN.md)
 
-## Why OpenAgents
+## What is OpenAgents
 
-OpenAgents is built for workflows where "just run the agents" is not enough.
-You can inspect progress in real time, pause at critical gates, resume interrupted runs, evaluate outcomes, and keep every step traceable on disk.
+OpenAgents is not another Agent product. It is a **workflow orchestration layer** that sits on top of various Agent tools, providing:
+
+- **DAG-based multi-agent orchestration** with parallel scheduling
+- **Human-in-the-loop gates** for critical decision points
+- **Resume and recovery** for interrupted runs
+- **Event streaming** for external Agent monitoring
+- **Standardized Skill specification** for cross-tool compatibility
 
 ### Core Principles
 
-- **Visible**: execution progress is shown step by step.
-- **Controllable**: critical steps can be reviewed, approved, edited, or resumed.
-- **Traceable**: outputs, logs, run state, and evaluation results are persisted locally.
+- **Visible**: execution progress is shown step by step
+- **Controllable**: critical steps can be reviewed, approved, edited, or resumed
+- **Traceable**: outputs, logs, run state, and evaluation results are persisted locally
+- **Secure**: default-safe execution with configurable boundaries
 
 ## Highlights
 
@@ -23,12 +29,52 @@ You can inspect progress in real time, pause at critical gates, resume interrupt
 - Human-in-the-loop gates with `yes` / `no` / `edit`
 - Gate automation via `--auto-approve` and `--gate-timeout`
 - Resume interrupted runs from persisted state
+- Node-level recovery for failed runs
 - Streaming and non-streaming LLM execution
 - LLM function calling with multi-round tool execution
 - Script runtime for local preprocessing or custom execution
 - Step-level post-processors for output cleanup and transformation
 - Step and workflow cache for repeatable runs
 - Error recovery modes: `fail`, `skip`, `fallback`, `notify`
+
+### Event Streaming (New)
+
+Stream workflow events for external Agent monitoring:
+
+```bash
+openagents events stream --run <run_id> --json
+```
+
+Features:
+- JSONL output format for easy parsing
+- Sequence-based ordering with resume support
+- Heartbeat for long-running tasks
+- See [Event Contract](./docs/EVENT-CONTRACT.md) for details
+
+### Preflight Diagnostics (New)
+
+Check project health before running:
+
+```bash
+openagents doctor
+```
+
+Validates:
+- Project configuration
+- API key configuration
+- Workflow and agent references
+- Security settings
+
+### Security (New)
+
+OpenAgents follows a **default-secure** approach:
+
+- Script runtime runs in VM sandbox with restricted module access
+- Post-processors blocked from shell interpreters
+- Webhooks blocked from private addresses by default
+- HTTPS enforced for webhook URLs
+
+See [Security Documentation](./docs/SECURITY.md) for details.
 
 ### Prompting and Context
 
@@ -118,6 +164,8 @@ openagents init [directory] --template <name>
 openagents init --list-templates
 openagents validate
 openagents validate --verbose
+openagents doctor              # Preflight diagnostics
+openagents preflight           # Alias for doctor
 ```
 
 ### Running Workflows
@@ -132,6 +180,14 @@ openagents run <workflow_id> --gate-timeout 30
 openagents run <workflow_id> --no-eval
 openagents resume <run_id>
 openagents resume <run_id> --stream
+```
+
+### Event Streaming
+
+```bash
+openagents events stream --run <run_id> --json
+openagents events stream --run <run_id> --json --from-sequence 10
+openagents events stream --run <run_id> --json --heartbeat-seconds 30
 ```
 
 ### Inspecting Runs
@@ -152,6 +208,8 @@ openagents analyze <workflow_id>
 openagents agents list
 openagents agents list --skills
 openagents workflows list
+openagents skills list              # List skills
+openagents skills show <skill_id>   # Show skill details
 openagents dag <workflow_id>
 openagents debug template <workflow_id> --input-json '{"key":"value"}'
 openagents debug server
@@ -451,11 +509,13 @@ OPENAGENTS_LANG=zh npx tsx src/cli/index.ts run novel_writing --input "悬疑故
 ## Documentation
 
 - [Chinese README](./README.zh-CN.md)
-- [Technical design](./docs/TECHNICAL-DESIGN.md)
-- [Web UI technical design](./docs/TECHNICAL-DESIGN-WEBUI.md)
-- [Web UI v6 tasks](./docs/WEBUI-V6-TASKS.md)
-- [Development progress](./docs/PROGRESS.md)
-- [Feature roadmap](./docs/FEATURE-ROADMAP.md)
+- [Skill Specification](./docs/SKILL-SPEC.md) — Standardized skill format for cross-tool compatibility
+- [Security Policy](./docs/SECURITY.md) — Security boundaries and execution policies
+- [Event Contract](./docs/EVENT-CONTRACT.md) — Stable event schema for external agents
+- [Technical Design](./docs/TECHNICAL-DESIGN.md)
+- [Web UI Technical Design](./docs/TECHNICAL-DESIGN-WEBUI.md)
+- [Development Progress](./docs/PROGRESS.md)
+- [Feature Roadmap](./docs/FEATURE-ROADMAP.md)
 
 ## License
 

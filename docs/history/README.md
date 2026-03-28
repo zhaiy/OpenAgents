@@ -14,5 +14,7 @@
   - “恢复与观测”这一轮已完成迭代的规划、任务拆解和模型提示词归档
 - `2026-03-phase-05-iteration-3-retrospective/`
   - “复盘与演进（聚焦版）”这一轮的规划、任务拆解、交接文档，以及本轮落地的两项配置能力 RFC 归档
+- `2026-03-phase-06-final-productization-skill-standardization/`
+  - “产品化收口与标准化 Skill 收尾”这一轮的最终规划、任务拆解、模型提示词和事件流任务卡归档
 
 仍在继续使用、尚未归档的前瞻性文档保留在 `docs/future/`。

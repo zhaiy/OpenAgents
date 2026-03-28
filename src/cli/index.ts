@@ -26,6 +26,9 @@ import { createCacheCommand } from './cache.js';
 import { createEvalCommand } from './eval.js';
 import { createAnalyzeCommand } from './analyze.js';
 import { createWebCommand } from './web.js';
+import { createSkillsCommand } from './skills.js';
+import { createDoctorCommand, createPreflightCommand } from './doctor.js';
+import { createEventsCommand } from './events.js';
 
 const program = new Command();
 
@@ -44,8 +47,12 @@ program.addCommand(createEvalCommand());
 program.addCommand(createAnalyzeCommand());
 program.addCommand(createInitCommand());
 program.addCommand(createValidateCommand());
+program.addCommand(createDoctorCommand());
+program.addCommand(createPreflightCommand());
 program.addCommand(createAgentsCommand());
 program.addCommand(createWorkflowsCommand());
+program.addCommand(createSkillsCommand());
+program.addCommand(createEventsCommand());
 program.addCommand(createDebugCommand());
 program.addCommand(createDagCommand());
 program.addCommand(createCacheCommand());

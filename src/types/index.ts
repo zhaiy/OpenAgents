@@ -1,14 +1,94 @@
 export type RuntimeType = 'llm-direct' | 'openclaw' | 'opencode' | 'claude-code' | 'script';
 
+/**
+ * Skill permission configuration.
+ * Defines what resources the skill can access.
+ */
+export interface SkillPermissions {
+  /** Whether the skill needs network access. Default: false */
+  network?: boolean;
+  /** File system access level. Default: 'none' */
+  filesystem?: 'none' | 'read-only' | 'read-write';
+  /** Environment variables the skill needs access to */
+  environment?: string[];
+}
+
+/**
+ * Skill dependency configuration.
+ * Declares other skills and tools this skill depends on.
+ */
+export interface SkillDependencies {
+  /** IDs of other skills this skill depends on */
+  skills?: string[];
+  /** Tools (MCP or script) this skill depends on */
+  tools?: ToolConfig[];
+}
+
+/**
+ * Skill example for documentation.
+ */
+export interface SkillExample {
+  /** Example input */
+  input: Record<string, unknown>;
+  /** Preview of expected output */
+  output_preview?: string;
+}
+
+/**
+ * Risk level for a skill.
+ * - low: No security risk, pure text processing
+ * - medium: Processes user input but doesn't execute
+ * - high: May execute code or access external resources
+ */
+export type SkillRiskLevel = 'low' | 'medium' | 'high';
+
+/**
+ * Skill metadata within the skill configuration.
+ */
+export interface SkillMeta {
+  /** Unique identifier, format: [a-z][a-z0-9_-]* */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Description of the skill's functionality */
+  description: string;
+  /** Semantic version string */
+  version: string;
+  /** Author information */
+  author?: string;
+  /** Tags for categorization and search */
+  tags?: string[];
+  /** Documentation or homepage URL */
+  homepage?: string;
+  /** Source repository URL */
+  repository?: string;
+}
+
+/**
+ * Complete skill configuration.
+ * 
+ * This is the standardized skill specification for OpenAgents.
+ * See docs/SKILL-SPEC.md for full documentation.
+ */
 export interface SkillConfig {
-  skill: {
-    id: string;
-    name: string;
-    description: string;
-    version: string;
-  };
+  /** Skill metadata */
+  skill: SkillMeta;
+  /** Instructions for the LLM */
   instructions: string;
+  /** Output format template (Markdown) */
   output_format?: string;
+  /** JSON Schema for input validation */
+  input_schema?: Record<string, unknown>;
+  /** Permission requirements */
+  permissions?: SkillPermissions;
+  /** Dependencies on other skills and tools */
+  dependencies?: SkillDependencies;
+  /** Risk level assessment */
+  risk_level?: SkillRiskLevel;
+  /** Detailed risk description */
+  risk_description?: string;
+  /** Usage examples */
+  examples?: SkillExample[];
 }
 
 export interface AgentConfig {

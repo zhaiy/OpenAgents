@@ -142,6 +142,22 @@ describe('ScriptRuntime', () => {
   });
 
   describe('allowed modules', () => {
+    it('blocks constructor-based sandbox escape attempts', async () => {
+      runtime = new ScriptRuntime({
+        projectRoot: tempDir,
+        scriptInline: 'return this.constructor.constructor("return process")()',
+      });
+
+      await expect(
+        runtime.execute({
+          systemPrompt: 'system',
+          userPrompt: 'input',
+          model: '',
+          timeoutSeconds: 10,
+        }),
+      ).rejects.toThrow(RuntimeError);
+    });
+
     it('blocks require of fs module for security', async () => {
       runtime = new ScriptRuntime({
         projectRoot: tempDir,

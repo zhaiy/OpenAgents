@@ -210,20 +210,25 @@ F1 -> F3 -> F2 -> F4 -> F5 -> F6
 
 1. 盘点当前 CLI / run / step / event / output 字段
 2. 标记哪些字段属于对外稳定契约
-3. 补齐必要说明或小幅收口
-4. 给出退出码和错误分类说明
-5. 补 contract / route / service 测试
+3. 设计轻量事件流订阅能力，优先采用 `openagents events stream --run <id> --json`
+4. 明确事件 schema、`sequence`、重连/续传和 heartbeat 语义
+5. 补齐必要说明或小幅收口
+6. 给出退出码和错误分类说明
+7. 补 contract / route / service 测试
 
 ### 建议产出
 
 - 契约清单
 - 字段稳定性说明
+- 事件流订阅命令说明
+- 事件 schema 清单
 - 契约测试
 
 ### 验收标准
 
 - 运行相关关键字段不再口径漂移
 - 后续复用者能知道哪些字段可依赖
+- 其他 Agent 可以通过稳定命令实时监听长任务事件
 - CLI 和输出目录说明清楚
 
 ---
